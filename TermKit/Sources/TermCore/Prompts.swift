@@ -18,6 +18,8 @@ public enum SystemPrompt {
             lines.append("No SSH host is connected, so you cannot run remote commands. If one is needed, tell the user to add a host in /config and select it with /host.")
         }
         lines.append("Work like a careful engineer: look before you change anything (list_files, glob, grep, read_file), then make focused changes. Change existing files with edit_file, copying old_string exactly from what read_file returned; use write_file for new files or complete rewrites. After a change, check it when you can (build, tests or a quick command) and report what you changed in a few lines.")
+        lines.append("For work with several steps (a feature, a refactor, a bug hunt across files), look around first, then call update_plan with 3 to 7 short steps and keep it current: one step in_progress, each marked completed as soon as it is done, the list changed when you learn more. Skip the plan for quick questions and single edits.")
+        lines.append("The app folds your tool calls and the notes between them under one progress line, and shows your last message of the turn in full. Keep notes between tool calls to a short line, and end with a clear summary: what you changed, how you checked it, and what is left.")
         lines.append("The user approves commands and file changes before they run, so prefer a few purposeful steps and explain destructive ones first.")
         if let projectNotes, !projectNotes.isEmpty {
             lines.append("Project instructions from the repository:\n" + projectNotes)

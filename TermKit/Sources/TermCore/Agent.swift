@@ -35,7 +35,7 @@ public struct Agent: Sendable {
     /// The model's context size in tokens. Old tool output is shortened in requests as the history nears it.
     public var contextTokens: Int
 
-    public init(client: ChatStreaming, tools: ToolRunning, maxSteps: Int = 40, contextTokens: Int = 128_000) {
+    public init(client: ChatStreaming, tools: ToolRunning, maxSteps: Int = 100, contextTokens: Int = 128_000) {
         self.client = client
         self.tools = tools
         self.maxSteps = maxSteps
@@ -52,6 +52,9 @@ public struct Agent: Sendable {
     ) async throws {
         var request = request
         request.tools = tools.specs
+        // The plan works whatever the tool box: the agent answers update_plan itself, without approval.
+        let plansHere = !request.tools.contains { $0.name == Plan.toolName }
+        if plansHere { request.tools.append(Plan.spec) }
 
         for _ in 0..<maxSteps {
             var text = ""
@@ -101,13 +104,17 @@ public struct Agent: Sendable {
             if toolCalls.isEmpty { return }
 
             for call in toolCalls {
-                let summary = tools.summary(call)
+                let isPlan = plansHere && call.name == Plan.toolName
+                // A plan update is titled update_plan, so the app can show it as the plan rather than a tool.
+                let summary = isPlan ? Plan.toolName : tools.summary(call)
                 await emit(.toolStarted(call, summary: summary))
 
                 var result: ToolResult
                 var denied = false
                 if Task.isCancelled {
                     result = ToolResult(text: "cancelled by the user", isError: true)
+                } else if isPlan {
+                    result = Plan.run(call)
                 } else if tools.needsApproval(call), await approve(call, summary) == .deny {
                     denied = true
                     result = ToolResult(text: "The user declined to run this tool call.", isError: true)
