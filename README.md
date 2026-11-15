@@ -2,7 +2,7 @@
 
 A coding agent for iPhone, in the spirit of Claude Code. Point it at any gateway that speaks the OpenAI-compatible or the Anthropic Messages API (base URL, API key, model IDs). On your servers it runs commands over SSH and reads, edits and searches the files of a project folder. Without a server it works in an on-device workspace. It can also fetch URLs.
 
-The app has three tabs. **Chat** is the agent, laid out like the desktop AI apps: a sidebar with your sessions, a composer with a **+** menu and a model picker with reasoning effort, and chips for the environment, the folder, permissions and the context window. **Terminal** is where you run commands yourself. **Settings** holds gateways, environments, connectors and the look. Built with the iOS 26 SDK, the bars, the composer and the cards use Liquid Glass (a frosted material on iOS 17 to 25). The terminal themes keep the classic CLI look.
+The app has three tabs. **Chat** is the agent: a clean new chat, your saved chats behind the clock button, a composer with a **+** menu and a model picker with reasoning effort, and two chips for where the agent works and how freely it acts. Long tasks get a plan, and each turn's tool calls fold into one progress line you can open. **Terminal** is where you run commands yourself. **Settings** holds gateways, environments, connectors and the look. Built with the iOS 26 SDK, the bars, the composer and the cards use Liquid Glass (a frosted material on iOS 17 to 25). The terminal themes keep the classic CLI look.
 
 ## Install
 
@@ -10,28 +10,27 @@ Every push builds an unsigned IPA on GitHub Actions.
 
 1. Download the IPA from the [**latest** release](../../releases/tag/latest), which every successful build on `main` replaces. `TermAI-<version>-<build>.ipa` has a new name for every build, so an older download cannot be mixed up with it; `TermAI-unsigned.ipa` is the same file under a link that never changes. The IPA is also attached to each **Build** run under *Actions*.
 2. Sign and install it with your sideloading tool (AltStore, Sideloadly, TrollStore, or your own certificate).
-3. Check what is installed: the bottom of the home screen shows `TermAI <version> (<build>) · <commit>`, the same as the release title (Settings shows the version and build too).
+3. Check what is installed: the bottom of Settings shows `TermAI <version> (<build>)`, and the build is the run number in the release title. Until a gateway exists, the new chat shows the commit too.
 
-The release also has `build-info.txt` (version, Xcode and SDK, and strings checked in the app binary), `mcp-live.txt` (the app's MCP client against a real server), and simulator screenshots of each theme, the home screen, the sidebar, an approval, the settings, the terminal and the connectors. When a build fails, the workflow opens an issue with the compiler errors.
+The release also has `build-info.txt` (version, Xcode and SDK, and strings checked in the app binary), `mcp-live.txt` (the app's MCP client against a real server), and simulator screenshots of each theme, a new chat, an unfolded turn, the chats list, an approval, the settings, the terminal and the connectors. When a build fails, the workflow opens an issue with the compiler errors.
 
 ## Use
 
-First launch: tap **Add a gateway** (or the gear in the sidebar) and fill in the base URL and API key. `/setup` does the same step by step in the input line.
+First launch: tap **Add a gateway** (or open the Settings tab) and fill in the base URL and API key. `/setup` does the same step by step in the input line.
 
 ### The panels
 
 | Where | What |
 | --- | --- |
-| ☰ sidebar | new session, search, your recent sessions (long-press to delete), the active gateway, settings |
-| home screen | start a chat or open the terminal, the folder and environment the session will use, connectors, the last session to pick up |
+| clock (top right) | your saved chats: search, open one, swipe to delete; the pencil next to it starts a new chat |
+| new chat | empty, with **Add a gateway** until one exists |
 | **+** | add photos or files, open a folder, slash commands, open the terminal, manage connectors |
 | model chip | the models of every gateway, **Effort** (Auto, Low, Medium, High, Extra, Max), refresh the model list |
-| environment chip | This iPhone, or one of your SSH environments, or a new one |
-| folder chip | recent folders on the SSH environment, open another, close it |
-| permissions chip | *Ask before acting* or *Bypass permissions* |
-| ring | how full the context window is; tap for the numbers |
+| place chip | This iPhone, or an SSH environment and its folder: recent folders, open another, close it, add an environment |
+| agent chip | *Ask first* or *Bypass*, and how full the context window is; its menu also compacts the session |
+| ⌄ (while typing) | puts the keyboard away; tapping or dragging the chat does too |
 
-Photos go to the model as images (it needs to be a vision model). PDFs go in as their text and text files up to 400 KB are put into the prompt; other files are copied into the workspace's `Inbox/` folder. Files come through the system document picker as copies, so iCloud Drive and other file providers work.
+Photos go to the model as images (it needs to be a vision model). PDFs go in as their text and text files up to 400 KB are put into the prompt; other files are copied into the workspace's `Inbox/` folder. Files come through the system document picker as copies, so iCloud Drive and other file providers work. Each file shows as *Reading…* until it is ready, then with its type and size; a line over the input says it was attached, saved to `Inbox/`, or what went wrong.
 
 ### Gateways
 
@@ -68,24 +67,30 @@ In the Anthropic format the app sends `anthropic-version: 2023-06-01` unless a c
 
 ### Terminal
 
-The **Terminal** tab (also *Open terminal* in **+** and the Terminal card on home) runs your own commands, apart from the chat:
+The **Terminal** tab (also *Open terminal* in **+**) runs your own commands, apart from the chat:
 
 - On an SSH environment each command runs on the host, and the terminal keeps the folder between commands, so `cd` works. Full-screen programs (`vim`, `top`, `less`, …) need a real TTY and are not supported.
 - On *This iPhone* a small set of file commands works in the on-device workspace: `ls`, `cd`, `pwd`, `cat`, `head`, `tail`, `mkdir`, `touch`, `rm`, `mv`, `cp` and `echo` (with `>` and `>>`). `help` lists them, `clear` clears the screen.
-- The key row has `esc`, history `↑ ↓`, `^C` (stop), `|`, `~`, `/`, `-`, `&&`, `>`, `$`, `paste` and a key that hides the keyboard.
+- The key row has `esc`, history `↑ ↓`, `^C` (stop), `|`, `~`, `/`, `-`, `&&`, `>`, `$` and `paste`, and at its right end a key that puts the keyboard away. Tapping or dragging the output does the same.
 - *Ask the agent about the output* attaches the last command and its output to the chat.
 
 ### Connectors (MCP)
 
-*Manage connectors* (in **+**, on home, in the sidebar and in Settings) adds remote MCP servers that speak Streamable HTTP. Presets: **DeepWiki** (no key), **Context7** (optional key) and **GitHub** (`https://api.githubcopilot.com/mcp/` with a personal access token). Each connector has a URL, an optional bearer token kept in the Keychain, extra headers and an on/off switch; *Test connection* lists its tools.
+*Manage connectors* (in **+** and in Settings) adds remote MCP servers that speak Streamable HTTP. Presets: **DeepWiki** (no key), **Context7** (optional key) and **GitHub** (`https://api.githubcopilot.com/mcp/` with a personal access token). Each connector has a URL, an optional bearer token kept in the Keychain, extra headers and an on/off switch; *Test connection* lists its tools.
 
 The tools of every connector that is on are offered to the agent as `mcp_<connector>_<tool>`. Tools the server marks read-only run without asking; the rest go through the usual approval. Servers that only allow an OAuth sign-in are not supported yet.
 
+### Plans and progress
+
+For a task with several steps the agent looks around first, then writes a plan with `update_plan` (3 to 7 steps) and keeps it current while it works. The plan never needs approval.
+
+Each turn folds what the agent did, its reasoning, tool calls and the notes between them, into one line: *Working… · 4 actions* with the current command while it runs, *Worked · 12 actions* once it is done, and the plan under it. Tap the line to see every step. Your prompt, the final answer and errors always stay in view; turns you start with `/` or `!` are not folded. One message can take up to 100 tool rounds.
+
 ### Working on a project
 
-Pick the SSH environment in the environment chip (or `/host web1`), then open a folder in the folder chip (or `/cd ~/app`). From then on:
+Pick the SSH environment in the place chip (or `/host web1`), then open a folder from the same chip (or `/cd ~/app`). From then on:
 
-- `read_file`, `write_file`, `edit_file`, `list_files`, `glob` and `grep` act on that folder on the host, and `ssh_exec` commands start there. The folder chip shows its name.
+- `read_file`, `write_file`, `edit_file`, `list_files`, `glob` and `grep` act on that folder on the host, and `ssh_exec` commands start there. The place chip shows its name.
 - `edit_file` replaces an exact snippet, like Claude Code's Edit tool. The approval prompt shows the change as a red/green diff before anything is written.
 - `grep` uses ripgrep when the host has it and `grep -E` otherwise. Nothing needs to be installed on the server: the tools use `sh`, `base64`, `find` and `grep`.
 - An `AGENTS.md` or `CLAUDE.md` in the folder is added to the system prompt.
@@ -94,7 +99,7 @@ Pick the SSH environment in the environment chip (or `/host web1`), then open a 
 
 ### Long sessions
 
-The ring under the input and the usage line under each answer (`ctx N%`) show the share of the model's context window the last request used. Set the window per gateway in Settings. As a run nears the limit, older tool output in the request is shortened automatically. From 85% on, TermAI suggests `/compact`, which asks the model for a handoff summary and continues from it.
+The ring in the agent chip and the usage line under each answer (`ctx N%`) show the share of the model's context window the last request used. Set the window per gateway in Settings. As a run nears the limit, older tool output in the request is shortened automatically. From 85% on, TermAI suggests `/compact` (also in the agent chip's menu), which asks the model for a handoff summary and continues from it.
 
 Models that stream their reasoning as `reasoning_content` or `reasoning` (DeepSeek and OpenRouter, for example) show it as a dim `✻ thinking` block. Tap it to expand. It is never sent back to the model.
 
@@ -130,6 +135,7 @@ SSH private keys must be Ed25519 or RSA in OpenSSH format.
 TermKit/            Swift package
   Sources/TermCore  models, streaming client, agent loop, tools (no UI, builds on Linux)
     Tools.swift         the tool set the model sees
+    Plan.swift          update_plan, the agent's checklist for long tasks
     ToolSet.swift       those tools plus the tools of MCP connectors
     MCP.swift           MCP client (Streamable HTTP, JSON or SSE replies)
     Shell.swift         terminal: SSH commands that keep the folder, on-device file commands
@@ -139,10 +145,10 @@ TermKit/            Swift package
     Anthropic.swift     the Anthropic Messages format
   Sources/TermSSH   SSH connection on top of Citadel
 App/                SwiftUI app
-  RootView.swift        tabs (Chat, Terminal, Settings), sidebar overlay, sheets
-  ChatView.swift        chat screen and transcript
+  RootView.swift        tabs (Chat, Terminal, Settings) and sheets
+  ChatView.swift        chat screen, transcript, folded activity and the plan
   TerminalView.swift    Terminal tab
-  Panels.swift          home screen, sidebar, environment and folder menus
+  Panels.swift          new chat, chats list, environment and folder menus
   Composer.swift        input box, + menu, model and effort menu, chips, approvals
   Connectors.swift      Manage connectors
   Attachments.swift     photos and files from the pickers

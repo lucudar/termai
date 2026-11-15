@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- **Plans**: for multi-step work the agent writes a short plan (`update_plan`) and keeps it current, without asking for approval. One message can take up to 100 tool rounds.
+- **Folded activity**: each turn's reasoning, tool calls and notes fold into one progress line with the plan under it; tap it to see every step. The prompt, the final answer and errors stay in view.
+- **Cleaner chat**: an empty new chat instead of the home cards. The sidebar is gone; saved chats open from the clock button.
+- **Two chips**: environment and folder in one, permissions and the context window (with Compact) in the other. Menus no longer get iOS 26's tinted capsules, so nothing is cut off.
+- **Keyboard**: a button in the composer and a pinned key in the terminal put it away, and tapping or dragging the chat or the output does too, so the tabs are always reachable.
+- **Files**: the document picker is presented by UIKit directly. Each file shows *Reading…*, then its type and size, and a line over the input says it was attached or what went wrong, with a haptic. Before, errors were hidden while no gateway was set up.
+- A `!command` shows in the transcript as you typed it.
+
 ## 0.4.0
 
 - Liquid Glass (iOS 26 SDK, Xcode 26): glass composer, chips, approval card, sidebar, home cards, terminal bar; material fallback on iOS 17-25.
