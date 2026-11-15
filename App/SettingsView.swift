@@ -2,10 +2,9 @@ import SwiftUI
 import TermCore
 import TermSSH
 
-/// Gateways, environments, agent behaviour and appearance.
+/// The Settings tab: gateways, environments, connectors, agent behaviour and appearance.
 struct SettingsView: View {
     @Environment(AppModel.self) var model
-    @Environment(\.dismiss) var dismiss
 
     var body: some View {
         NavigationStack {
@@ -61,6 +60,23 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button {
+                        model.present(.connectors)
+                    } label: {
+                        HStack {
+                            Label("Manage connectors", systemImage: "puzzlepiece.extension")
+                            Spacer()
+                            Text(model.connectors.isEmpty ? "None" : "\(model.enabledConnectorCount) of \(model.connectors.count) on")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Connectors")
+                } footer: {
+                    Text("Remote MCP servers (DeepWiki, Context7, GitHub or your own) whose tools the agent can use.")
+                }
+
+                Section {
                     Picker("Permissions", selection: Binding(
                         get: { model.settings.approvalMode },
                         set: { model.setApproval($0) })) {
@@ -100,11 +116,6 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
     }
 
