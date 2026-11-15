@@ -1,7 +1,7 @@
 import SwiftUI
 import TermCore
 
-/// Chat, Terminal and Settings as tabs, the sessions sidebar over them, and every sheet in one place.
+/// Chat, Terminal and Settings as tabs, and every sheet in one place.
 struct RootView: View {
     @Environment(AppModel.self) var model
 
@@ -9,30 +9,20 @@ struct RootView: View {
         @Bindable var model = model
         let palette = model.palette
 
-        ZStack(alignment: .leading) {
-            TabView(selection: $model.tab) {
-                ChatScreen()
-                    .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
-                    .tag(AppTab.chat)
-                TerminalScreen()
-                    .tabItem { Label("Terminal", systemImage: "apple.terminal") }
-                    .tag(AppTab.terminal)
-                SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gearshape") }
-                    .tag(AppTab.settings)
-            }
-            .minimizingTabBar()
-
-            if model.showSidebar {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .onTapGesture { model.showSidebar = false }
-                    .transition(.opacity)
-                SidebarView()
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+        TabView(selection: $model.tab) {
+            ChatScreen()
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tag(AppTab.chat)
+            TerminalScreen()
+                .tabItem { Label("Terminal", systemImage: "apple.terminal") }
+                .tag(AppTab.terminal)
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(AppTab.settings)
         }
-        .animation(.spring(duration: 0.32, bounce: 0.12), value: model.showSidebar)
+        .minimizingTabBar()
+        // Dragging any list or transcript puts the keyboard away, so the tab bar is never stuck under it.
+        .scrollDismissesKeyboard(.interactively)
         .tint(palette.accent)
         .preferredColorScheme(model.theme.isDark ? .dark : .light)
         .sheet(item: $model.sheet) { sheet in
@@ -44,21 +34,16 @@ struct RootView: View {
                     NavigationStack {
                         HostEditor(host: host, secret: "", passphrase: "", isNew: true)
                     }
-                case .files:
-                    DocumentPicker(
-                        onPick: { urls in
-                            model.sheet = nil
-                            model.addFiles(urls)
-                        },
-                        onCancel: { model.sheet = nil })
-                        .ignoresSafeArea()
                 case .folder:
                     FolderSheet()
                 case .connectors:
                     ConnectorsView()
+                case .chats:
+                    ChatsView()
                 }
             }
             .environment(model)
+            .scrollDismissesKeyboard(.interactively)
             .tint(palette.accent)
             .preferredColorScheme(model.theme.isDark ? .dark : .light)
         }

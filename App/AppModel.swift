@@ -18,6 +18,13 @@ struct ShareItem: Identifiable {
     let text: String
 }
 
+/// A line over the input after files are added: what happened to them, or what went wrong.
+struct ComposerNotice: Equatable {
+    let id = UUID()
+    var text: String
+    var isError: Bool
+}
+
 /// The tabs: chat with the agent, a terminal of your own, settings.
 enum AppTab: Hashable {
     case chat, terminal, settings
@@ -28,19 +35,19 @@ enum AppSheet: Identifiable {
     case share(String)
     /// A new SSH environment from the environment menu.
     case host(SSHHost)
-    /// The document picker behind "Add files".
-    case files
     /// "Open folder…" on the SSH environment.
     case folder
     case connectors
+    /// Every saved chat, to open or delete one.
+    case chats
 
     var id: String {
         switch self {
         case .share: return "share"
         case .host(let host): return "host-" + host.id.uuidString
-        case .files: return "files"
         case .folder: return "folder"
         case .connectors: return "connectors"
+        case .chats: return "chats"
         }
     }
 }
@@ -88,12 +95,14 @@ final class AppModel {
     var usageLine: String?
     /// Bumped when the transcript should jump to the bottom.
     var scrollTick = 0
-    var showSidebar = false
     var recentSessions: [SessionSummary] = []
     /// Files and photos for the next prompt.
     var attachments: [PendingAttachment] = []
-    /// Picked files still being read.
-    var attachmentsLoading = 0
+    /// Names of picked files and photos still being read.
+    var attachmentsLoading: [String] = []
+    var composerNotice: ComposerNotice?
+    /// Screenshot mode: every folded turn shown unfolded.
+    var expandAllActivity = false
     var showPhotoPicker = false
     /// Prompt tokens of the last request: the context ring and `ctx %`.
     var lastInputTokens = 0
@@ -164,7 +173,8 @@ final class AppModel {
 
         if isDemo {
             loadDemo(withApproval: arguments.contains("-demoApproval"), home: arguments.contains("-demoHome"))
-            showSidebar = arguments.contains("-demoSidebar")
+            if arguments.contains("-demoChats") { sheet = .chats }
+            expandAllActivity = arguments.contains("-demoExpanded")
             if arguments.contains("-demoSettings") { tab = .settings }
             if arguments.contains("-demoTerminal") {
                 loadTerminalDemo()
@@ -190,7 +200,6 @@ final class AppModel {
         get { tab == .settings }
         set {
             if newValue {
-                showSidebar = false
                 tab = .settings
             } else if tab == .settings {
                 tab = .chat
@@ -209,7 +218,6 @@ final class AppModel {
 
     /// Shows a sheet once a menu that asked for it has finished closing; presenting while it closes can fail.
     func present(_ next: AppSheet) {
-        showSidebar = false
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             self?.sheet = next
@@ -224,7 +232,6 @@ final class AppModel {
     }
 
     func openTerminal() {
-        showSidebar = false
         tab = .terminal
     }
 
@@ -266,7 +273,7 @@ final class AppModel {
         return !session.transcript.contains { content.contains($0.kind) }
     }
 
-    /// The latest note or error, shown under the cards on the home screen.
+    /// The latest note or error, shown on an empty chat.
     var homeStatus: TranscriptItem? {
         session.transcript.last { $0.kind == .info || $0.kind == .error }
     }
@@ -278,6 +285,15 @@ final class AppModel {
         guard let directory = host.workingDirectory, !directory.isEmpty else { return "No folder" }
         return directory.split(separator: "/").last.map { String($0) } ?? directory
     }
+
+    /// The environment and folder chip: `This iPhone`, `web1`, `web1 · app`.
+    var placeName: String {
+        guard let host = activeHost else { return "This iPhone" }
+        guard let directory = host.workingDirectory, !directory.isEmpty else { return host.name }
+        return host.name + " · " + folderName
+    }
+
+    var contextPercent: Int { Self.percent(lastInputTokens, of: contextLimit) }
 
     var suggestions: [SlashCommand] {
         setup == nil && pendingApproval == nil ? Commands.suggestions(for: input) : []
@@ -352,7 +368,9 @@ final class AppModel {
         case .empty:
             if !attachments.isEmpty { send("") }
         case .prompt(let text): send(text)
-        case .shell(let command): runShell(command)
+        case .shell(let command):
+            append(.user, trimmed)
+            runShell(command)
         case .command(let name, let args):
             append(.user, trimmed)
             runCommand(name, args)

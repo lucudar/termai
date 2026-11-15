@@ -18,6 +18,8 @@ struct PendingAttachment: Identifiable, Equatable, Sendable {
     let id = UUID()
     var name: String
     var kind: Kind
+    /// Type and size, or where it was saved, under the name in its chip.
+    var detail: String = ""
 
     var isImage: Bool {
         if case .image = kind { return true }
@@ -68,19 +70,21 @@ enum FileAttachment {
         }
         let data = try Data(contentsOf: url)
         let type = UTType(filenameExtension: url.pathExtension.lowercased())
+        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
 
         if type?.conforms(to: .image) == true || type == nil, let image = ImageAttachment.dataURL(from: data) {
-            return PendingAttachment(name: name, kind: .image(image))
+            return PendingAttachment(name: name, kind: .image(image), detail: "image, \(size)")
         }
-        if type?.conforms(to: .pdf) == true, let text = PDFDocument(data: data)?.string,
+        if type?.conforms(to: .pdf) == true, let document = PDFDocument(data: data), let text = document.string,
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= inlineLimit {
-            return PendingAttachment(name: name, kind: .text(text))
+            let pages = document.pageCount == 1 ? "1 page" : "\(document.pageCount) pages"
+            return PendingAttachment(name: name, kind: .text(text), detail: "PDF text, \(pages)")
         }
         if data.count <= inlineLimit, !data.contains(0), let text = String(data: data, encoding: .utf8) {
-            return PendingAttachment(name: name, kind: .text(text))
+            return PendingAttachment(name: name, kind: .text(text), detail: "text, \(size)")
         }
         let path = try copy(data, named: name, into: inbox)
-        return PendingAttachment(name: name, kind: .file(path))
+        return PendingAttachment(name: name, kind: .file(path), detail: "\(size), saved as \(path)")
     }
 
     /// Saves `data` as `Inbox/<name>`, or `Inbox/<name> 2` and so on when that exists. Returns the relative path.
@@ -108,41 +112,50 @@ enum FileAttachment {
     }
 }
 
-/// The system document picker, copying what is picked into the app. Copies work for iCloud and other
-/// providers whose files are not on the device yet, which reading the originals in place does not.
-struct DocumentPicker: UIViewControllerRepresentable {
-    let onPick: ([URL]) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+/// The system document picker, presented by UIKit over whatever is on screen rather than from a SwiftUI
+/// sheet. It copies what is picked into the app, so iCloud and other providers whose files are not on the
+/// device yet work too.
+enum DocumentPicker {
+    @MainActor
+    static func present(onPick: @escaping ([URL]) -> Void) {
+        guard let top = topViewController() else { return }
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
         picker.allowsMultipleSelection = true
         picker.shouldShowFileExtensions = true
-        picker.delegate = context.coordinator
-        return picker
+        let delegate = Delegate(onPick: onPick)
+        picker.delegate = delegate
+        top.present(picker, animated: true)
     }
 
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+    /// The screen on top: the window's root view controller, or whatever it is presenting.
+    @MainActor
+    static func topViewController() -> UIViewController? {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
+        var top = (windows.first { $0.isKeyWindow } ?? windows.first)?.rootViewController
+        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        return top
+    }
 
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: ([URL]) -> Void
-        let onCancel: () -> Void
+    /// The picker holds its delegate weakly, so the delegate keeps itself alive until the picker is done.
+    final class Delegate: NSObject, UIDocumentPickerDelegate {
+        private let onPick: ([URL]) -> Void
+        private var keepAlive: Delegate?
 
-        init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+        init(onPick: @escaping ([URL]) -> Void) {
             self.onPick = onPick
-            self.onCancel = onCancel
+            super.init()
+            keepAlive = self
         }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             onPick(urls)
+            keepAlive = nil
         }
 
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
+            keepAlive = nil
         }
     }
 }
