@@ -1,0 +1,13 @@
+# Notes for coding agents
+
+TermAI is an iOS SwiftUI app (iOS 17, Swift 5 language mode) with its logic in the `TermKit` Swift package.
+
+- `TermKit/Sources/TermCore` has no UI and must keep building on Linux: Foundation only, no UIKit or SwiftUI, no `Process`.
+- `TermKit/Sources/TermSSH` wraps Citadel 0.11.1 (pinned on purpose).
+- `App/` is the SwiftUI app; `project.yml` generates the Xcode project with XcodeGen. The app icon is drawn by `scripts/make_icon.py` in CI.
+- Views used from another file must not have `private` stored properties, so their memberwise initializers stay internal.
+- `AppModel` is split by area: `AppModel.swift` (state, input), `+Run` (agent runs, approval, SSH), `+Commands` (slash commands, setup), `+Panels` (settings, sidebar, menus, demo). Its members stay internal, not `private`, so every extension can reach them.
+- Run `swift test --package-path TermKit` after changing TermCore. CI runs it on Linux and macOS, then builds the IPA. A failed build opens an issue titled `CI: … failed on <sha>` with the errors; successful `main` builds replace the `latest` release.
+- CI steps live in `scripts/ci.sh`; `.github/workflows/build.yml` only calls it. Change the script, not the workflow: the GitHub connection that pushes here cannot write workflow files.
+- Saved JSON (profiles, hosts, settings, sessions) must keep loading: add new fields as optionals with defaults.
+- Remote file scripts in `RemoteFiles.swift` must stay POSIX sh and work with GNU, BSD and BusyBox tools.
