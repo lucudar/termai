@@ -28,10 +28,14 @@ public struct ChatRequest: Sendable {
     public var effort: Effort?
     /// Seconds without new bytes before the request gives up.
     public var idleTimeout: Double
+    public var format: APIFormat
+    /// Anthropic format only: the answer's token limit.
+    public var maxTokens: Int
 
     public init(baseURL: String, apiKey: String, model: String, messages: [ChatMessage], tools: [ToolSpec] = [],
                 authScheme: AuthScheme = .bearer, headers: [HTTPHeader] = [], effort: Effort? = nil,
-                idleTimeout: Double = Profile.defaultIdleTimeout) {
+                idleTimeout: Double = Profile.defaultIdleTimeout, format: APIFormat = .openAI,
+                maxTokens: Int = Profile.defaultMaxTokens) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.model = model
@@ -41,6 +45,8 @@ public struct ChatRequest: Sendable {
         self.headers = headers
         self.effort = effort
         self.idleTimeout = idleTimeout
+        self.format = format
+        self.maxTokens = maxTokens
     }
 }
 
@@ -48,6 +54,8 @@ public enum StreamEvent: Equatable, Sendable {
     case text(String)
     /// Reasoning text from models that think out loud before answering.
     case reasoning(String)
+    /// A finished thinking block that has to be sent back with the assistant message (Anthropic).
+    case reasoningBlock(ReasoningBlock)
     /// A fragment of a tool call; fragments with the same index belong together.
     case toolCallDelta(index: Int, id: String?, name: String?, arguments: String?)
     case usage(input: Int, output: Int)
@@ -209,7 +217,9 @@ public struct OpenAIClient: ChatStreaming {
     }
 
     public func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<StreamEvent, Error> {
-        AsyncThrowingStream { continuation in
+        // Gateways set to the Anthropic format get the same history converted for /messages.
+        if request.format == .anthropic { return AnthropicClient().streamChat(request) }
+        return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let urlRequest = try Self.urlRequest(for: request)
@@ -243,10 +253,13 @@ public struct OpenAIClient: ChatStreaming {
 
     /// Model IDs advertised by the endpoint's `/models`.
     public func listModels(baseURL: String, apiKey: String, authScheme: AuthScheme = .bearer,
-                           headers: [HTTPHeader] = []) async throws -> [String] {
-        var urlRequest = URLRequest(url: try Self.endpoint(baseURL, "/models"))
+                           headers: [HTTPHeader] = [], format: APIFormat = .openAI) async throws -> [String] {
+        // Anthropic pages /models at 20 entries unless asked for more.
+        let path = format == .anthropic ? "/models?limit=1000" : "/models"
+        var urlRequest = URLRequest(url: try Self.endpoint(baseURL, path))
         urlRequest.timeoutInterval = 30
-        Self.authorize(&urlRequest, apiKey: apiKey, scheme: authScheme, headers: headers)
+        Self.authorize(&urlRequest, apiKey: apiKey, scheme: authScheme,
+                       headers: format == .anthropic ? AnthropicClient.versioned(headers) : headers)
         let (status, body) = try await HTTP.collect(urlRequest)
         guard (200..<300).contains(status) else { throw APIError.from(status: status, body: body) }
         let object = try? JSONSerialization.jsonObject(with: body)

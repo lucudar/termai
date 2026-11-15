@@ -13,6 +13,35 @@ public enum AuthScheme: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// The wire protocol a gateway speaks.
+public enum APIFormat: String, Codable, Sendable, CaseIterable {
+    /// OpenAI-compatible `/chat/completions`: OpenAI, OpenRouter, LiteLLM, Ollama, vLLM and most proxies.
+    case openAI = "openai"
+    /// Anthropic's `/messages`.
+    case anthropic
+
+    public var title: String {
+        switch self {
+        case .openAI: return "OpenAI-compatible"
+        case .anthropic: return "Anthropic Messages"
+        }
+    }
+}
+
+/// A thinking block from an Anthropic model, kept so it can go back to the API during a tool-use loop.
+public struct ReasoningBlock: Codable, Equatable, Sendable {
+    public var text: String
+    public var signature: String?
+    /// Set for redacted thinking, whose content arrives encrypted.
+    public var redactedData: String?
+
+    public init(text: String, signature: String? = nil, redactedData: String? = nil) {
+        self.text = text
+        self.signature = signature
+        self.redactedData = redactedData
+    }
+}
+
 /// An extra header sent with every request to a gateway, e.g. for routing or a tenant.
 public struct HTTPHeader: Codable, Equatable, Sendable {
     public var name: String
@@ -61,11 +90,15 @@ public struct Profile: Codable, Identifiable, Equatable, Sendable {
     public var discoveredModels: [String]?
     /// Effort a session starts at on this gateway; nil leaves it to the provider.
     public var defaultEffort: Effort?
+    /// nil means OpenAI-compatible, or Anthropic for api.anthropic.com.
+    public var apiFormat: APIFormat?
+    /// Anthropic format only: the answer's token limit; nil means `defaultMaxTokens`.
+    public var maxTokens: Int?
 
     public init(id: UUID = UUID(), name: String, baseURL: String, models: [String] = [], defaultModel: String? = nil,
                 contextWindow: Int? = nil, authScheme: AuthScheme? = nil, headers: [HTTPHeader]? = nil,
                 idleTimeout: Double? = nil, discoverModels: Bool? = nil, discoveredModels: [String]? = nil,
-                defaultEffort: Effort? = nil) {
+                defaultEffort: Effort? = nil, apiFormat: APIFormat? = nil, maxTokens: Int? = nil) {
         self.id = id
         self.name = name
         self.baseURL = baseURL
@@ -78,25 +111,38 @@ public struct Profile: Codable, Identifiable, Equatable, Sendable {
         self.discoverModels = discoverModels
         self.discoveredModels = discoveredModels
         self.defaultEffort = defaultEffort
+        self.apiFormat = apiFormat
+        self.maxTokens = maxTokens
     }
 
     public static let defaultContextWindow = 128_000
     public static let defaultIdleTimeout: Double = 300
+    public static let defaultMaxTokens = 32_000
 
     public var secretKey: String { "profile.\(id.uuidString).apikey" }
     /// What the model picker offers: the hand-made list, or else what discovery found.
     public var pickerModels: [String] { models.isEmpty ? (discoveredModels ?? []) : models }
     public var preferredModel: String? { defaultModel ?? pickerModels.first }
     public var contextLimit: Int { contextWindow.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultContextWindow }
-    public var auth: AuthScheme { authScheme ?? .bearer }
+    public var format: APIFormat { apiFormat ?? Self.guessFormat(baseURL) }
+    /// Anthropic's own API takes the key as x-api-key; everything else defaults to a bearer token.
+    public var auth: AuthScheme { authScheme ?? (format == .anthropic ? .xAPIKey : .bearer) }
+    public var outputLimit: Int { maxTokens.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultMaxTokens }
     public var extraHeaders: [HTTPHeader] { headers ?? [] }
     public var streamTimeout: Double { idleTimeout.flatMap { $0 >= 5 ? $0 : nil } ?? Self.defaultIdleTimeout }
     public var discovers: Bool { discoverModels ?? true }
 
-    /// A request to this gateway with its auth scheme, headers and timeout.
+    /// A request to this gateway with its format, auth scheme, headers and timeout.
     public func chatRequest(apiKey: String, model: String, messages: [ChatMessage], effort: Effort? = nil) -> ChatRequest {
         ChatRequest(baseURL: baseURL, apiKey: apiKey, model: model, messages: messages,
-                    authScheme: auth, headers: extraHeaders, effort: effort, idleTimeout: streamTimeout)
+                    authScheme: auth, headers: extraHeaders, effort: effort, idleTimeout: streamTimeout,
+                    format: format, maxTokens: outputLimit)
+    }
+
+    /// api.anthropic.com speaks the Anthropic format; any other host is taken as OpenAI-compatible.
+    public static func guessFormat(_ baseURL: String) -> APIFormat {
+        let host = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() ?? ""
+        return host == "api.anthropic.com" ? .anthropic : .openAI
     }
 
     /// Reads "200k", "1m", "131,072" and the like; nil for anything else or under 1k.
@@ -217,14 +263,17 @@ public struct ChatMessage: Codable, Equatable, Sendable {
     public var toolCallID: String?
     /// Images attached to a user message, as data URLs.
     public var images: [String]?
+    /// Thinking blocks of an assistant message, for gateways that need them back (Anthropic).
+    public var reasoning: [ReasoningBlock]?
 
     public init(role: Role, content: String, toolCalls: [ToolCall]? = nil, toolCallID: String? = nil,
-                images: [String]? = nil) {
+                images: [String]? = nil, reasoning: [ReasoningBlock]? = nil) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
         self.images = images
+        self.reasoning = reasoning
     }
 }
 

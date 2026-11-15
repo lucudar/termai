@@ -2,7 +2,8 @@ import Foundation
 
 public enum AgentEvent: Sendable {
     case assistantDelta(String)
-    /// Reasoning ("thinking") the model streams before it answers. Shown to the user, never sent back.
+    /// Reasoning ("thinking") the model streams before it answers, for display. Anthropic's signed thinking
+    /// blocks travel separately, on the assistant message.
     case reasoningDelta(String)
     /// A message to append to the conversation history (assistant turn or tool result).
     case message(ChatMessage)
@@ -55,6 +56,7 @@ public struct Agent: Sendable {
         for _ in 0..<maxSteps {
             var text = ""
             var calls: [Int: ToolCall] = [:]
+            var reasoning: [ReasoningBlock] = []
             // The full history stays in `request`; only the copy sent to the model is trimmed.
             var outgoing = request
             outgoing.messages = ContextBudget.trimToolResults(request.messages, limit: contextTokens)
@@ -67,6 +69,8 @@ public struct Agent: Sendable {
                         await emit(.assistantDelta(delta))
                     case .reasoning(let delta):
                         await emit(.reasoningDelta(delta))
+                    case .reasoningBlock(let block):
+                        reasoning.append(block)
                     case .toolCallDelta(let index, let id, let name, let arguments):
                         var call = calls[index] ?? ToolCall(id: "", name: "", arguments: "")
                         if let id, !id.isEmpty { call.id = id }
@@ -90,7 +94,8 @@ public struct Agent: Sendable {
                 return call
             }
 
-            let assistant = ChatMessage(role: .assistant, content: text, toolCalls: toolCalls.isEmpty ? nil : toolCalls)
+            let assistant = ChatMessage(role: .assistant, content: text, toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+                                        reasoning: reasoning.isEmpty ? nil : reasoning)
             request.messages.append(assistant)
             await emit(.message(assistant))
             if toolCalls.isEmpty { return }
