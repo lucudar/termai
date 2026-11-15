@@ -2,7 +2,7 @@ import SwiftUI
 import TermCore
 import UIKit
 
-/// The input card with its + menu, model menu and send button, and the chips under it, on Liquid Glass.
+/// The input card with its + menu, model menu and send button, and two chips under it, on Liquid Glass.
 struct Composer: View {
     @Environment(AppModel.self) var model
     var inputFocused: FocusState<Bool>.Binding
@@ -11,7 +11,7 @@ struct Composer: View {
         @Bindable var model = model
         let palette = model.palette
 
-        GlassGroup(spacing: 10) {
+        GlassGroup(spacing: 4) {
             VStack(spacing: 10) {
                 if let approval = model.pendingApproval {
                     ApprovalBar(approval: approval, palette: palette)
@@ -21,7 +21,10 @@ struct Composer: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    if !model.attachments.isEmpty || model.attachmentsLoading > 0 {
+                    if let notice = model.composerNotice {
+                        NoticeLine(notice: notice, palette: palette)
+                    }
+                    if !model.attachments.isEmpty || !model.attachmentsLoading.isEmpty {
                         AttachmentStrip(palette: palette)
                     }
                     Group {
@@ -43,6 +46,19 @@ struct Composer: View {
 
                     HStack(spacing: 8) {
                         PlusMenu(palette: palette)
+                        if inputFocused.wrappedValue {
+                            Button {
+                                inputFocused.wrappedValue = false
+                            } label: {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(palette.dim)
+                                    .frame(width: 34, height: 34)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Hide keyboard")
+                        }
                         Spacer(minLength: 6)
                         ModelMenu(palette: palette)
                         SendButton(palette: palette, send: send)
@@ -54,15 +70,14 @@ struct Composer: View {
                 .liquidGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
 
                 HStack(spacing: 8) {
-                    EnvironmentChip(palette: palette)
-                    FolderChip(palette: palette)
-                    Spacer(minLength: 4)
-                    PermissionsChip(palette: palette)
-                    ContextRing(palette: palette)
+                    PlaceChip(palette: palette)
+                    Spacer(minLength: 8)
+                    AgentChip(palette: palette)
                 }
             }
         }
         .animation(.spring(duration: 0.3), value: model.pendingApproval)
+        .animation(.spring(duration: 0.25), value: model.composerNotice)
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
@@ -85,7 +100,7 @@ struct ChipLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             if let symbol { Image(systemName: symbol).font(.system(size: 12, weight: .medium)) }
-            Text(title).lineLimit(1)
+            Text(title).lineLimit(1).truncationMode(.middle)
         }
         .font(palette.chip)
         .foregroundStyle(color)
@@ -110,7 +125,7 @@ private struct PlusMenu: View {
                     Label("Add photos", systemImage: "photo.on.rectangle")
                 }
                 Button {
-                    model.present(.files)
+                    model.pickFiles()
                 } label: {
                     Label("Add files", systemImage: "paperclip")
                 }
@@ -143,11 +158,14 @@ private struct PlusMenu: View {
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .frame(width: 34, height: 34)
+                .background(palette.text.opacity(0.08), in: Circle())
                 .contentShape(Circle())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .accessibilityLabel("Add")
     }
 }
@@ -206,8 +224,14 @@ private struct ModelMenu: View {
             .font(palette.chip)
             .lineLimit(1)
             .truncationMode(.middle)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(palette.text.opacity(0.06), in: Capsule())
             .frame(maxWidth: 230, alignment: .trailing)
         }
+        // A plain label: iOS 26 would otherwise draw its own tinted capsule around every menu.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .accessibilityLabel("Model and effort")
     }
 
@@ -249,6 +273,7 @@ private struct SendButton: View {
     }
 }
 
+/// What goes with the next prompt: a chip per file or photo, and one per file still being read.
 private struct AttachmentStrip: View {
     @Environment(AppModel.self) private var model
     let palette: Palette
@@ -257,9 +282,22 @@ private struct AttachmentStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(model.attachments) { attachment in
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         Image(systemName: attachment.symbol)
-                        Text(attachment.name).lineLimit(1)
+                            .font(.system(size: 15))
+                            .foregroundStyle(palette.accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(attachment.name)
+                                .foregroundStyle(palette.text)
+                                .lineLimit(1)
+                            if !attachment.detail.isEmpty {
+                                Text(attachment.detail)
+                                    .font(.caption2)
+                                    .foregroundStyle(palette.dim)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: 190, alignment: .leading)
                         Button {
                             model.removeAttachment(attachment.id)
                         } label: {
@@ -269,138 +307,147 @@ private struct AttachmentStrip: View {
                         .accessibilityLabel("Remove \(attachment.name)")
                     }
                     .font(palette.small)
-                    .foregroundStyle(palette.text)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(palette.text.opacity(0.08), in: Capsule())
+                    .padding(.vertical, 7)
+                    .background(palette.text.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
                 }
-                if model.attachmentsLoading > 0 {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("Reading…")
+                ForEach(Array(model.attachmentsLoading.enumerated()), id: \.offset) { _, name in
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(palette.accent)
+                        Text("Reading \(name)…")
+                            .foregroundStyle(palette.dim)
+                            .lineLimit(1)
+                            .frame(maxWidth: 190, alignment: .leading)
                     }
                     .font(palette.small)
-                    .foregroundStyle(palette.dim)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(palette.text.opacity(0.05), in: Capsule())
+                    .padding(.vertical, 9)
+                    .background(palette.text.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
+            .animation(.spring(duration: 0.25), value: model.attachments)
+            .animation(.spring(duration: 0.25), value: model.attachmentsLoading)
         }
+    }
+}
+
+/// How adding files went: attached, saved to the workspace, or the error.
+private struct NoticeLine: View {
+    @Environment(AppModel.self) private var model
+    let notice: ComposerNotice
+    let palette: Palette
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+            Text(notice.text)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                model.composerNotice = nil
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .font(palette.small)
+        .foregroundStyle(notice.isError ? palette.error : palette.success)
+        .transition(.opacity)
     }
 }
 
 // MARK: Chips under the box
 
-private struct EnvironmentChip: View {
+/// Where the agent works: This iPhone, or an SSH environment and its folder, both from one menu.
+private struct PlaceChip: View {
     @Environment(AppModel.self) private var model
     let palette: Palette
 
     var body: some View {
         Menu {
             EnvironmentMenuContent()
+            if model.activeHost != nil {
+                Divider()
+                FolderMenuContent()
+            }
         } label: {
-            ChipLabel(title: model.environmentName, symbol: model.activeHost == nil ? "iphone" : "server.rack",
-                      color: palette.text.opacity(0.8), palette: palette)
+            ChipLabel(title: model.placeName, symbol: model.activeHost == nil ? "iphone" : "server.rack",
+                      color: palette.text.opacity(0.85), palette: palette)
         }
-        .accessibilityLabel("Environment")
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Environment and folder")
     }
 }
 
-private struct FolderChip: View {
-    @Environment(AppModel.self) private var model
-    let palette: Palette
-
-    var body: some View {
-        Menu {
-            FolderMenuContent()
-        } label: {
-            ChipLabel(title: model.folderName, symbol: "folder", color: palette.text.opacity(0.8), palette: palette)
-        }
-        .accessibilityLabel("Folder")
-    }
-}
-
-private struct PermissionsChip: View {
+/// How freely the agent acts and how full its context window is, in one chip. The menu also compacts.
+private struct AgentChip: View {
     @Environment(AppModel.self) private var model
     let palette: Palette
 
     var body: some View {
         let bypass = model.settings.approvalMode == .auto
-        Menu {
-            Button {
-                model.setApproval(.ask)
-            } label: {
-                if bypass {
-                    Text("Ask before acting")
-                } else {
-                    Label("Ask before acting", systemImage: "checkmark")
-                }
-            }
-            Button {
-                model.setApproval(.auto)
-            } label: {
-                if bypass {
-                    Label("Bypass permissions", systemImage: "checkmark")
-                } else {
-                    Text("Bypass permissions")
-                }
-            }
-        } label: {
-            ChipLabel(title: bypass ? "Bypass" : "Ask first", symbol: bypass ? "bolt.shield" : "hand.raised",
-                      color: bypass ? palette.accent : palette.text.opacity(0.8), palette: palette)
-        }
-        .accessibilityLabel("Permissions")
-    }
-}
-
-/// How full the model's context window is; tap for the numbers.
-private struct ContextRing: View {
-    @Environment(AppModel.self) private var model
-    let palette: Palette
-    @State private var showing = false
-
-    var body: some View {
         let fraction = model.contextFraction
-        let color = fraction >= 0.85 ? palette.error : palette.accent
-        Button {
-            showing = true
-        } label: {
-            ZStack {
-                Circle().stroke(palette.dim.opacity(0.35), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: CGFloat(fraction))
-                    .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 15, height: 15)
-            .padding(9)
-            .liquidGlass(in: Circle(), interactive: true)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Context window")
-        .popover(isPresented: $showing) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Context window").foregroundStyle(palette.dim)
-                    Spacer(minLength: 16)
-                    Text(model.contextSummary).foregroundStyle(palette.text)
+        let ring = fraction >= 0.85 ? palette.error : palette.accent
+        let color = bypass ? palette.accent : palette.text.opacity(0.85)
+        Menu {
+            Section("Permissions") {
+                Button {
+                    model.setApproval(.ask)
+                } label: {
+                    if bypass {
+                        Text("Ask before acting")
+                    } else {
+                        Label("Ask before acting", systemImage: "checkmark")
+                    }
                 }
-                ProgressView(value: fraction)
-                    .tint(color)
-                Text(fraction >= 0.85
-                     ? "Almost full. /compact summarizes the session so the model keeps room to work."
-                     : "Tokens the last request used, out of this gateway's context window.")
-                    .font(.caption)
-                    .foregroundStyle(palette.dim)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    model.setApproval(.auto)
+                } label: {
+                    if bypass {
+                        Label("Bypass permissions", systemImage: "checkmark")
+                    } else {
+                        Text("Bypass permissions")
+                    }
+                }
             }
-            .font(.system(size: 14))
-            .padding(16)
-            .frame(width: 280)
-            .presentationCompactAdaptation(.popover)
+            Section {
+                Button {
+                    model.compactSession()
+                } label: {
+                    Label("Compact the session", systemImage: "arrow.down.right.and.arrow.up.left")
+                }
+                .disabled(model.session.messages.isEmpty || model.isRunning)
+            } header: {
+                Text(verbatim: "Context window: \(model.contextSummary) (\(model.contextPercent)%)")
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: bypass ? "bolt.shield" : "hand.raised")
+                    .font(.system(size: 12, weight: .medium))
+                Text(bypass ? "Bypass" : "Ask first").lineLimit(1)
+                ZStack {
+                    Circle().stroke(palette.dim.opacity(0.35), lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(fraction))
+                        .stroke(ring, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 13, height: 13)
+                Text(verbatim: "\(model.contextPercent)%").foregroundStyle(palette.dim)
+            }
+            .font(palette.chip)
+            .foregroundStyle(color)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .liquidGlass(in: Capsule(), interactive: true)
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Permissions and context window")
     }
 }
 

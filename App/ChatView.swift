@@ -3,7 +3,7 @@ import SwiftUI
 import TermCore
 import UIKit
 
-/// The Chat tab: home or transcript, with the composer floating over it and the sessions button on top.
+/// The Chat tab: a new chat or the transcript, the composer floating over it, chats and new chat on top.
 struct ChatScreen: View {
     @Environment(AppModel.self) var model
     @FocusState var inputFocused: Bool
@@ -16,7 +16,7 @@ struct ChatScreen: View {
         NavigationStack {
             Group {
                 if model.showsHome {
-                    HomeView(focusInput: { inputFocused = true })
+                    EmptyChatView()
                 } else {
                     TranscriptView()
                 }
@@ -29,27 +29,20 @@ struct ChatScreen: View {
             .navigationTitle(model.showsHome ? "" : model.session.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         inputFocused = false
-                        model.toggleSidebar()
+                        model.showChats()
                     } label: {
-                        Image(systemName: "line.3.horizontal")
+                        Image(systemName: "clock.arrow.circlepath")
                     }
-                    .accessibilityLabel("Sessions")
-                }
-                if model.isRunning {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ProgressView().controlSize(.small).tint(palette.accent)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
+                    .accessibilityLabel("Chats")
                     Button {
                         model.newSession()
                     } label: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .accessibilityLabel("New session")
+                    .accessibilityLabel("New chat")
                 }
             }
         }
@@ -66,26 +59,29 @@ struct ChatScreen: View {
 
 private struct TranscriptView: View {
     @Environment(AppModel.self) private var model
+    @State private var expanded: Set<UUID> = []
 
     var body: some View {
         let palette = model.palette
+        let rows = TranscriptLayout.rows(model.session.transcript, running: model.isRunning)
         GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(model.session.transcript) { item in
-                            ItemView(item: item, palette: palette)
-                        }
-                        if model.isRunning, model.pendingApproval == nil {
-                            if palette.monospaced {
-                                Text("▍").font(palette.font).foregroundStyle(palette.accent)
-                            } else {
-                                HStack(spacing: 8) {
-                                    ProgressView().controlSize(.small).tint(palette.accent)
-                                    Text("Working…").font(palette.small).foregroundStyle(palette.dim)
+                        ForEach(rows) { row in
+                            switch row {
+                            case .item(let item):
+                                ItemView(item: item, palette: palette)
+                            case .activity(let group):
+                                ActivityView(group: group, palette: palette,
+                                             expanded: model.expandAllActivity || expanded.contains(group.id)) {
+                                    toggle(group.id)
                                 }
                             }
-                        } else if let usage = model.usageLine {
+                        }
+                        if model.isRunning, model.pendingApproval == nil, !TranscriptLayout.hasLive(rows) {
+                            WorkingLine(palette: palette)
+                        } else if !model.isRunning, let usage = model.usageLine {
                             Text(usage).font(palette.small).foregroundStyle(palette.dim)
                         }
                         Color.clear.frame(height: 1).id("bottom")
@@ -100,9 +96,250 @@ private struct TranscriptView: View {
                 .defaultScrollAnchor(.bottom)
                 .softScrollEdge()
                 .scrollDismissesKeyboard(.interactively)
+                // A tap on the transcript puts the keyboard away.
+                .simultaneousGesture(TapGesture().onEnded { Keyboard.hide() })
                 .onChange(of: model.scrollTick) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
+            }
+        }
+    }
+
+    private func toggle(_ id: UUID) {
+        withAnimation(.snappy(duration: 0.25)) {
+            if expanded.contains(id) {
+                expanded.remove(id)
+            } else {
+                expanded.insert(id)
+            }
+        }
+    }
+}
+
+// MARK: Folding a turn's work
+
+/// A turn's work: thinking, tool calls, the plan and the notes between them, shown under one line.
+struct ActivityGroup {
+    let id: UUID
+    var items: [TranscriptItem]
+    /// The run is still working on it.
+    var live: Bool
+
+    var actions: [TranscriptItem] { items.filter { $0.kind == .tool && !$0.isPlan } }
+    var plan: TranscriptItem? { items.last { $0.isPlan } }
+    var failures: Int { actions.filter { $0.status == .failed }.count }
+    /// What it is doing now: the latest tool call, or the reasoning streaming in.
+    var current: TranscriptItem? { items.last { ($0.kind == .tool && !$0.isPlan) || $0.kind == .thinking } }
+}
+
+enum TranscriptRow: Identifiable {
+    case item(TranscriptItem)
+    case activity(ActivityGroup)
+
+    var id: UUID {
+        switch self {
+        case .item(let item): return item.id
+        case .activity(let group): return group.id
+        }
+    }
+}
+
+enum TranscriptLayout {
+    static let work: Set<TranscriptItem.Kind> = [.tool, .thinking]
+
+    /// The prompt, the final answer and errors stay in view; what the agent did in between folds into one
+    /// group per turn. Turns started by a /command or a !command are left as they are.
+    static func rows(_ transcript: [TranscriptItem], running: Bool) -> [TranscriptRow] {
+        var rows: [TranscriptRow] = []
+        var head: TranscriptItem?
+        var turn: [TranscriptItem] = []
+
+        func close(isLast: Bool) {
+            defer { turn = [] }
+            let folds = head.map { !$0.text.hasPrefix("/") && !$0.text.hasPrefix("!") } ?? false
+            guard folds, let lastWork = turn.lastIndex(where: { TranscriptLayout.work.contains($0.kind) }) else {
+                rows += turn.map { TranscriptRow.item($0) }
+                return
+            }
+            let worked = turn[...lastWork]
+            let folded: [TranscriptItem] = worked.filter { $0.kind != .error }
+            rows.append(.activity(ActivityGroup(id: folded[0].id, items: folded, live: isLast && running)))
+            rows += worked.filter { $0.kind == .error }.map { TranscriptRow.item($0) }
+            rows += turn[(lastWork + 1)...].map { TranscriptRow.item($0) }
+        }
+
+        for item in transcript {
+            if item.kind == .user {
+                close(isLast: false)
+                rows.append(.item(item))
+                head = item
+            } else {
+                turn.append(item)
+            }
+        }
+        close(isLast: true)
+        return rows
+    }
+
+    /// Whether a group is still working, so its header already shows the progress.
+    static func hasLive(_ rows: [TranscriptRow]) -> Bool {
+        rows.contains { row in
+            if case .activity(let group) = row { return group.live }
+            return false
+        }
+    }
+}
+
+extension TranscriptItem {
+    /// A plan update from update_plan, shown as the plan rather than as a tool call.
+    var isPlan: Bool { kind == .tool && title == Plan.toolName }
+}
+
+/// A turn's work under one line: a spinner and what it is doing while it runs, a summary once done.
+/// Tap it to unfold every step; the plan stays in view either way.
+private struct ActivityView: View {
+    let group: ActivityGroup
+    let palette: Palette
+    let expanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: toggle) {
+                HStack(spacing: 8) {
+                    if group.live {
+                        ProgressView().controlSize(.small).tint(palette.accent)
+                    } else {
+                        Image(systemName: group.failures > 0 ? "exclamationmark.circle" : "checkmark.circle")
+                            .foregroundStyle(group.failures > 0 ? palette.error : palette.success)
+                    }
+                    Text(title).foregroundStyle(palette.text.opacity(0.9))
+                    if group.failures > 0 {
+                        Text("· \(group.failures) failed").foregroundStyle(palette.error)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(palette.dim)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
+                .font(palette.small)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(expanded ? "Hide the steps" : "Show the steps")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(group.items) { item in
+                        ItemView(item: item, palette: palette)
+                    }
+                }
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(palette.dim.opacity(0.25)).frame(width: 1.5)
+                }
+            } else {
+                if group.live, let line = liveLine {
+                    Text(line)
+                        .font(palette.monoSmall)
+                        .foregroundStyle(palette.dim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if let plan = group.plan {
+                    PlanCard(item: plan, live: group.live, palette: palette)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.code.opacity(0.6),
+                    in: RoundedRectangle(cornerRadius: palette.monospaced ? 6 : 16, style: .continuous))
+    }
+
+    private var title: String {
+        let count = group.actions.count
+        let actions = count == 1 ? "1 action" : "\(count) actions"
+        if group.live {
+            let doing = group.current?.kind == .thinking ? "Thinking…" : "Working…"
+            return count == 0 ? doing : "\(doing) · \(actions)"
+        }
+        return count == 0 ? "Thought it through" : "Worked · \(actions)"
+    }
+
+    /// The running command, or the last line of the reasoning streaming in.
+    private var liveLine: String? {
+        guard let current = group.current else { return nil }
+        if current.kind == .thinking {
+            return current.text.split(separator: "\n").last.map { String($0) }
+        }
+        return current.title
+    }
+}
+
+/// The agent's plan for a long task: finished steps ticked off, the current one highlighted.
+struct PlanCard: View {
+    let item: TranscriptItem
+    let live: Bool
+    let palette: Palette
+
+    var body: some View {
+        let steps = Plan.parse(item.text)
+        let done = steps.filter { $0.status == .completed }.count
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: "checklist").foregroundStyle(palette.accent)
+                Text("Plan").foregroundStyle(palette.text)
+                Text(verbatim: "\(done)/\(steps.count)").foregroundStyle(palette.dim)
+            }
+            .font(palette.small.weight(.semibold))
+            ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: symbol(step.status))
+                        .font(.system(size: 13))
+                        .foregroundStyle(color(step.status))
+                        .symbolEffect(.pulse, isActive: live && step.status == .inProgress)
+                    Text(step.step)
+                        .foregroundStyle(step.status == .completed ? palette.dim : palette.text)
+                        .strikethrough(step.status == .completed, color: palette.dim)
+                        .fontWeight(step.status == .inProgress ? .semibold : .regular)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(palette.small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func symbol(_ status: PlanStep.Status) -> String {
+        switch status {
+        case .completed: return "checkmark.circle.fill"
+        case .inProgress: return "circle.inset.filled"
+        case .pending: return "circle"
+        }
+    }
+
+    private func color(_ status: PlanStep.Status) -> Color {
+        switch status {
+        case .completed: return palette.success
+        case .inProgress: return palette.accent
+        case .pending: return palette.dim
+        }
+    }
+}
+
+/// While a run starts, before anything arrives that could be folded.
+private struct WorkingLine: View {
+    let palette: Palette
+
+    var body: some View {
+        if palette.monospaced {
+            Text("▍").font(palette.font).foregroundStyle(palette.accent)
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(palette.accent)
+                Text("Working…").font(palette.small).foregroundStyle(palette.dim)
             }
         }
     }
@@ -149,7 +386,13 @@ private struct ItemView: View {
                 }
             }
         case .tool:
-            ToolBlock(item: item, palette: palette)
+            if item.isPlan, item.status != .failed {
+                PlanCard(item: item, live: false, palette: palette)
+                    .padding(10)
+                    .background(palette.code, in: RoundedRectangle(cornerRadius: palette.monospaced ? 6 : 14, style: .continuous))
+            } else {
+                ToolBlock(item: item, palette: palette)
+            }
         case .thinking:
             ThinkingBlock(item: item, palette: palette)
         case .info:
