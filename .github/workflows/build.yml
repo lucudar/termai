@@ -1,0 +1,45 @@
+name: Build
+
+# The steps are in scripts/ci.sh, so they can change without editing this file.
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  # The rolling "latest" release with the IPA, and an issue with the errors when a build fails.
+  contents: write
+  issues: write
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci.sh core-linux
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  ipa:
+    # Intel image: the arm64 macOS pool was leaving jobs queued until they timed out.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci.sh ipa
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: TermAI
+          path: |
+            out/TermAI-unsigned.ipa
+            shots/
+            logs/
+          if-no-files-found: warn
