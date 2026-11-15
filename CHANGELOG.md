@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Liquid Glass (iOS 26 SDK, Xcode 26): glass composer, chips, approval card, sidebar, home cards, terminal bar; material fallback on iOS 17-25.
+- Files attach again: system document picker that copies the file in (iCloud included), one sheet router, menus present after they close, reading off the main thread, PDF text, errors shown.
+- Chat and Terminal are separate tabs. The terminal runs your own commands over SSH (keeps the folder between commands) or file commands on This iPhone, with a key row; "Ask the agent" sends the last output to the chat.
+- Manage connectors: remote MCP servers (Streamable HTTP, bearer token, headers), presets DeepWiki, Context7, GitHub; their tools are offered to the agent, read-only ones run without asking.
+- Markdown in answers, home launch cards, Settings is a tab.
+- Each CI build has its own build number (the run number) and shows it with the commit at the bottom of the home screen. The release adds a versioned IPA, `build-info.txt` (strings checked in the binary) and a live MCP check against DeepWiki.
+
 ## 0.3.0
 
 Desktop-style panels and gateway settings.

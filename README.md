@@ -2,16 +2,17 @@
 
 A coding agent for iPhone, in the spirit of Claude Code. Point it at any gateway that speaks the OpenAI-compatible or the Anthropic Messages API (base URL, API key, model IDs). On your servers it runs commands over SSH and reads, edits and searches the files of a project folder. Without a server it works in an on-device workspace. It can also fetch URLs.
 
-The screen is laid out like the desktop AI apps: a sidebar with your sessions, a composer with a **+** menu and a model picker with reasoning effort, and chips for the environment, the folder, permissions and the context window. The terminal themes keep the classic CLI look.
+The app has three tabs. **Chat** is the agent, laid out like the desktop AI apps: a sidebar with your sessions, a composer with a **+** menu and a model picker with reasoning effort, and chips for the environment, the folder, permissions and the context window. **Terminal** is where you run commands yourself. **Settings** holds gateways, environments, connectors and the look. Built with the iOS 26 SDK, the bars, the composer and the cards use Liquid Glass (a frosted material on iOS 17 to 25). The terminal themes keep the classic CLI look.
 
 ## Install
 
 Every push builds an unsigned IPA on GitHub Actions.
 
-1. Download `TermAI-unsigned.ipa` from the [**latest** release](../../releases/tag/latest), which every successful build on `main` replaces. The same IPA is also attached to each **Build** run under *Actions*.
+1. Download the IPA from the [**latest** release](../../releases/tag/latest), which every successful build on `main` replaces. `TermAI-<version>-<build>.ipa` has a new name for every build, so an older download cannot be mixed up with it; `TermAI-unsigned.ipa` is the same file under a link that never changes. The IPA is also attached to each **Build** run under *Actions*.
 2. Sign and install it with your sideloading tool (AltStore, Sideloadly, TrollStore, or your own certificate).
+3. Check what is installed: the bottom of the home screen shows `TermAI <version> (<build>) · <commit>`, the same as the release title (Settings shows the version and build too).
 
-The release also has simulator screenshots of each theme, the home screen, the sidebar, an approval and the settings. When a build fails, the workflow opens an issue with the compiler errors.
+The release also has `build-info.txt` (version, Xcode and SDK, and strings checked in the app binary), `mcp-live.txt` (the app's MCP client against a real server), and simulator screenshots of each theme, the home screen, the sidebar, an approval, the settings, the terminal and the connectors. When a build fails, the workflow opens an issue with the compiler errors.
 
 ## Use
 
@@ -22,15 +23,15 @@ First launch: tap **Add a gateway** (or the gear in the sidebar) and fill in the
 | Where | What |
 | --- | --- |
 | ☰ sidebar | new session, search, your recent sessions (long-press to delete), the active gateway, settings |
-| home screen | the folder and environment the session will use, and the last session to pick up |
-| **+** | add photos or files, open a folder, slash commands, run a command yourself |
+| home screen | start a chat or open the terminal, the folder and environment the session will use, connectors, the last session to pick up |
+| **+** | add photos or files, open a folder, slash commands, open the terminal, manage connectors |
 | model chip | the models of every gateway, **Effort** (Auto, Low, Medium, High, Extra, Max), refresh the model list |
 | environment chip | This iPhone, or one of your SSH environments, or a new one |
 | folder chip | recent folders on the SSH environment, open another, close it |
 | permissions chip | *Ask before acting* or *Bypass permissions* |
 | ring | how full the context window is; tap for the numbers |
 
-Photos go to the model as images (it needs to be a vision model). Text files up to 200 KB are put into the prompt; other files are copied into the workspace's `Inbox/` folder.
+Photos go to the model as images (it needs to be a vision model). PDFs go in as their text and text files up to 400 KB are put into the prompt; other files are copied into the workspace's `Inbox/` folder. Files come through the system document picker as copies, so iCloud Drive and other file providers work.
 
 ### Gateways
 
@@ -65,7 +66,20 @@ In the Anthropic format the app sends `anthropic-version: 2023-06-01` unless a c
 | `/new`, `/sessions [n]`, `/retry` | session control |
 | `/copy`, `/export`, `/clear` | copy the last answer, share as Markdown, clear the screen |
 
-While you type, a key row has `esc`, `/`, `!`, history `↑ ↓`, `tab` (complete a command), `^C` (stop the current run) and `paste`.
+### Terminal
+
+The **Terminal** tab (also *Open terminal* in **+** and the Terminal card on home) runs your own commands, apart from the chat:
+
+- On an SSH environment each command runs on the host, and the terminal keeps the folder between commands, so `cd` works. Full-screen programs (`vim`, `top`, `less`, …) need a real TTY and are not supported.
+- On *This iPhone* a small set of file commands works in the on-device workspace: `ls`, `cd`, `pwd`, `cat`, `head`, `tail`, `mkdir`, `touch`, `rm`, `mv`, `cp` and `echo` (with `>` and `>>`). `help` lists them, `clear` clears the screen.
+- The key row has `esc`, history `↑ ↓`, `^C` (stop), `|`, `~`, `/`, `-`, `&&`, `>`, `$`, `paste` and a key that hides the keyboard.
+- *Ask the agent about the output* attaches the last command and its output to the chat.
+
+### Connectors (MCP)
+
+*Manage connectors* (in **+**, on home, in the sidebar and in Settings) adds remote MCP servers that speak Streamable HTTP. Presets: **DeepWiki** (no key), **Context7** (optional key) and **GitHub** (`https://api.githubcopilot.com/mcp/` with a personal access token). Each connector has a URL, an optional bearer token kept in the Keychain, extra headers and an on/off switch; *Test connection* lists its tools.
+
+The tools of every connector that is on are offered to the agent as `mcp_<connector>_<tool>`. Tools the server marks read-only run without asking; the rest go through the usual approval. Servers that only allow an OAuth sign-in are not supported yet.
 
 ### Working on a project
 
@@ -116,19 +130,27 @@ SSH private keys must be Ed25519 or RSA in OpenSSH format.
 TermKit/            Swift package
   Sources/TermCore  models, streaming client, agent loop, tools (no UI, builds on Linux)
     Tools.swift         the tool set the model sees
+    ToolSet.swift       those tools plus the tools of MCP connectors
+    MCP.swift           MCP client (Streamable HTTP, JSON or SSE replies)
+    Shell.swift         terminal: SSH commands that keep the folder, on-device file commands
     TextTools.swift     exact-text edits, line numbering, glob patterns
     RemoteFiles.swift   file tools on an SSH host (POSIX sh scripts)
     Context.swift       context budget and /compact
     Anthropic.swift     the Anthropic Messages format
   Sources/TermSSH   SSH connection on top of Citadel
 App/                SwiftUI app
-  TerminalView.swift    main screen and transcript
-  Panels.swift          header, home screen, sidebar, environment and folder menus
+  RootView.swift        tabs (Chat, Terminal, Settings), sidebar overlay, sheets
+  ChatView.swift        chat screen and transcript
+  TerminalView.swift    Terminal tab
+  Panels.swift          home screen, sidebar, environment and folder menus
   Composer.swift        input box, + menu, model and effort menu, chips, approvals
-  SettingsView.swift    gateways, environments, agent, appearance
+  Connectors.swift      Manage connectors
+  Attachments.swift     photos and files from the pickers
+  Glass.swift           Liquid Glass, with a material fallback before iOS 26
+  SettingsView.swift    gateways, environments, connectors, agent, appearance
   AppModel*.swift       state and actions, split by area
 project.yml         XcodeGen project definition
-scripts/            app icon, CI failure reports
+scripts/            CI steps (ci.sh), app icon, CI failure reports
 ```
 
 ```sh
@@ -138,11 +160,16 @@ xcodegen generate && open TermAI.xcodeproj
 
 The remote file tools are tested by running their scripts through the local `/bin/sh`, so CI exercises them on both GNU (Linux) and BSD (macOS) tools.
 
-Two tests talk to real services and are skipped unless configured:
+Tests that talk to real services are skipped unless configured:
 
 ```sh
 python3 TermKit/Tests/mock_server.py 8765 &
 TERMAI_TEST_BASEURL=http://127.0.0.1:8765/v1 \
 TERMAI_SSH_HOST=127.0.0.1 TERMAI_SSH_USER=me TERMAI_SSH_PASSWORD=… \
 swift test --package-path TermKit
+
+# an MCP server; CI runs this one against DeepWiki and publishes the output as mcp-live.txt
+TERMAI_MCP_URL=https://mcp.deepwiki.com/mcp TERMAI_MCP_CALL=read_wiki_structure \
+TERMAI_MCP_ARGS='{"repoName":"modelcontextprotocol/swift-sdk"}' \
+swift test --package-path TermKit --filter MCPTests/testLiveServer
 ```
