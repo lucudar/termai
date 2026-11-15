@@ -104,6 +104,11 @@ struct HomeView: View {
                         .foregroundStyle(palette.dim)
                         .multilineTextAlignment(.center)
                 }
+
+                Text("TermAI \(AppInfo.version)")
+                    .font(.caption2)
+                    .foregroundStyle(palette.dim)
+                    .padding(.top, 4)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)

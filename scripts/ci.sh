@@ -6,8 +6,16 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs out shots
 BUNDLE_ID=io.github.hgfh34bnvcn.termai
+# Read from the built app by stamp_build.
+APP_VERSION=?
+APP_BUILD=?
+IPA_NAME=
 
 on_main() { [ "${GITHUB_REF:-}" = refs/heads/main ]; }
+
+short_sha() { printf %s "${GITHUB_SHA:-$(git rev-parse HEAD 2> /dev/null)}" | cut -c1-7; }
+
+plist_get() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2> /dev/null; }
 
 # Opens an issue with the errors (when running in Actions) and stops.
 fail() {
@@ -48,6 +56,42 @@ core_tests() {
     fi
 }
 
+# Each CI build gets its own build number (the run number) and its commit. The home screen shows both
+# (Settings shows the build), so an installed app can be matched with its release.
+stamp_build() {
+    local plist=$1/Info.plist
+    if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$plist" || fail "Stamping the build number"
+    fi
+    /usr/libexec/PlistBuddy -c "Delete :TermAICommit" "$plist" > /dev/null 2>&1
+    /usr/libexec/PlistBuddy -c "Add :TermAICommit string $(short_sha)" "$plist" || fail "Stamping the commit"
+    APP_VERSION=$(plist_get "$plist" CFBundleShortVersionString)
+    APP_BUILD=$(plist_get "$plist" CFBundleVersion)
+    IPA_NAME="TermAI-$APP_VERSION-$APP_BUILD.ipa"
+}
+
+# What is inside the IPA, published with the release: the version, the toolchain, and strings from the
+# app binary that tell this UI from older builds (0.3 had a disabled "Manage connectors (soon)").
+build_info() {
+    local app=$1 plist=$1/Info.plist bins text s
+    bins=$(find "$app" -maxdepth 1 -type f \( -name TermAI -o -name '*.dylib' \))
+    text=$(strings -a $bins 2> /dev/null)
+    {
+        echo "TermAI $APP_VERSION ($APP_BUILD) · $(plist_get "$plist" TermAICommit)"
+        echo "commit ${GITHUB_SHA:-local}, run ${GITHUB_RUN_NUMBER:-local}"
+        echo "$(xcodebuild -version | paste -sd ' ' -), SDK $(plist_get "$plist" DTSDKName), minimum iOS $(plist_get "$plist" MinimumOSVersion)"
+        echo "binary $(du -k $bins | awk '{ kb += $1 } END { print kb }') KB, $(printf '%s\n' "$text" | wc -l | tr -d ' ') strings"
+        echo
+        echo "Lines with each string in the app binary:"
+        for s in "Manage connectors (soon)" "Manage connectors" "Ask the agent about the output" \
+            "https://mcp.deepwiki.com/mcp" "notifications/initialized" "UIDocumentPickerViewController" \
+            "GlassEffectContainer" "glassEffect"; do
+            printf '  %-34s %s\n' "\"$s\"" "$(printf '%s\n' "$text" | grep -cF -- "$s")"
+        done
+    } > out/build-info.txt
+    cat out/build-info.txt
+}
+
 build_ipa() {
     python3 scripts/make_icon.py App/Assets.xcassets/AppIcon.appiconset/icon-1024.png || fail "Drawing the app icon"
     command -v xcodegen > /dev/null || brew install xcodegen
@@ -62,23 +106,64 @@ build_ipa() {
         fail "iOS build" logs/xcodebuild-device.log
     fi
     echo "warnings: $(grep -c "warning:" logs/xcodebuild-device.log)"
-    mkdir -p out/Payload
+    rm -rf out/Payload && mkdir -p out/Payload
     cp -R build/device/Build/Products/Release-iphoneos/TermAI.app out/Payload/ || fail "Packaging the IPA"
+    stamp_build out/Payload/TermAI.app
+    build_info out/Payload/TermAI.app
     (cd out && zip -qry TermAI-unsigned.ipa Payload && rm -rf Payload) || fail "Packaging the IPA"
+    cp out/TermAI-unsigned.ipa "out/$IPA_NAME" || fail "Packaging the IPA"
     ls -lh out
 }
 
-# A public download that does not expire, unlike workflow artifacts.
+# A public download that does not expire, unlike workflow artifacts. The versioned IPA gets a new name
+# every build, so a phone's Downloads folder cannot mix it up with an older one.
 publish_release() {
     local short
-    short=$(printf %s "$GITHUB_SHA" | cut -c1-7)
-    printf 'Unsigned IPA built from %s (run %s).\n\n%s\n\nSign and install it with AltStore, Sideloadly or TrollStore.\n' \
-        "$short" "${GITHUB_RUN_NUMBER:-?}" "${MESSAGE:-}" > notes.md
+    short=$(short_sha)
+    {
+        printf 'TermAI %s (%s), unsigned IPA built from %s (run %s).\n\n%s\n\n' \
+            "$APP_VERSION" "$APP_BUILD" "$short" "${GITHUB_RUN_NUMBER:-?}" "${MESSAGE:-}"
+        printf 'The installed app shows `TermAI %s (%s) · %s` at the bottom of the home screen. ' \
+            "$APP_VERSION" "$APP_BUILD" "$short"
+        printf '`%s` and `TermAI-unsigned.ipa` are the same file. Sign and install it with AltStore, Sideloadly or TrollStore.\n\n' \
+            "$IPA_NAME"
+        printf '```\n'
+        cat out/build-info.txt
+        printf '```\n'
+    } > notes.md
     gh release delete latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2> /dev/null || true
     sleep 3
-    gh release create latest out/TermAI-unsigned.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-        --title "TermAI latest ($short)" --notes-file notes.md --prerelease \
+    gh release create latest out/TermAI-unsigned.ipa "out/$IPA_NAME" out/build-info.txt \
+        --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+        --title "TermAI $APP_VERSION ($APP_BUILD) · $short" --notes-file notes.md --prerelease \
         || fail "Publishing the latest release"
+}
+
+# The app's MCP client against a real server (DeepWiki, no sign-in): lists the tools and calls one.
+# Published as mcp-live.txt; a failure here does not fail the build.
+mcp_live_check() {
+    local status
+    TERMAI_MCP_URL=https://mcp.deepwiki.com/mcp TERMAI_MCP_CALL=read_wiki_structure \
+        TERMAI_MCP_ARGS='{"repoName":"modelcontextprotocol/swift-sdk"}' \
+        swift test --package-path TermKit --filter 'MCPTests/testLiveServer' > logs/mcp-live.log 2>&1
+    status=$?
+    {
+        if [ "$status" -eq 0 ]; then
+            echo "Live MCP check, DeepWiki (https://mcp.deepwiki.com/mcp): passed"
+        else
+            echo "Live MCP check, DeepWiki (https://mcp.deepwiki.com/mcp): failed (exit $status)"
+        fi
+        echo
+        if grep -q "Test Suite" logs/mcp-live.log; then
+            sed -n '/Test Suite/,$p' logs/mcp-live.log | head -n 60
+        else
+            tail -n 40 logs/mcp-live.log
+        fi
+    } > out/mcp-live.txt
+    cat out/mcp-live.txt
+    if on_main; then
+        gh release upload latest out/mcp-live.txt --clobber --repo "$GITHUB_REPOSITORY" || echo "could not add the MCP check"
+    fi
 }
 
 shoot() {
@@ -125,6 +210,8 @@ print(next(d["udid"] for k in keys for d in runtimes[k] if d["name"].startswith(
     shoot "$udid" sidebar -demoSidebar
     shoot "$udid" approval -demoApproval
     shoot "$udid" settings -demoSettings
+    shoot "$udid" terminal -demoTerminal
+    shoot "$udid" connectors -demoConnectors
 }
 
 case "${1:-}" in
@@ -136,6 +223,7 @@ ipa)
     core_tests macos
     build_ipa
     if on_main; then publish_release; fi
+    mcp_live_check
     if screenshots; then
         if on_main && ls shots/*.png > /dev/null 2>&1; then
             gh release upload latest shots/*.png --clobber --repo "$GITHUB_REPOSITORY" || echo "could not add the screenshots"
