@@ -80,12 +80,16 @@ extension AppModel {
                     apiKey: apiKey, model: model,
                     messages: [ChatMessage(role: .system, content: system)] + history,
                     effort: effort)
-                let tools = ToolBox(workspace: self.workspace, shell: shell, projectDirectory: projectDirectory)
+                let builtIn = ToolBox(workspace: self.workspace, shell: shell, projectDirectory: projectDirectory)
+                // Tools of the enabled connectors come after the built-in ones, as mcp_<connector>_<tool>.
+                let remote = await self.remoteTools()
+                try Task.checkCancellation()
+                let tools: ToolRunning = remote.isEmpty ? builtIn : ToolSet(base: builtIn, remote: remote)
                 let agent = Agent(client: OpenAIClient(), tools: tools, contextTokens: profile.contextLimit)
                 try await agent.run(
                     request: request,
                     approve: { [weak self] call, summary in
-                        await self?.requestApproval(summary, detail: ToolBox.preview(call)) ?? .deny
+                        await self?.requestApproval(summary, detail: ToolBox.preview(call) ?? ToolSet.argumentsPreview(call)) ?? .deny
                     },
                     emit: { [weak self] event in await self?.handle(event) })
             } catch {
@@ -242,23 +246,27 @@ extension AppModel {
 
     // MARK: SSH
 
-    func connect(to host: SSHHost) async throws -> SSHConnection {
+    /// The open connection to `host`, or a new one. Its notes go to the terminal tab when that asked.
+    func connect(to host: SSHHost, inTerminal: Bool = false) async throws -> SSHConnection {
         if let connection, connectionHostID == host.id, connection.isConnected { return connection }
         await dropConnection()
         guard let secret = secrets.secret(for: host.secretKey), !secret.isEmpty else {
-            throw UserFacingError(message: "no password or key stored for this host; open /config")
+            throw UserFacingError(message: "no password or key stored for this host. add one in Settings › Environments")
+        }
+        let note: (String) -> Void = { [weak self] text in
+            if inTerminal { self?.noteTerminal(text) } else { self?.info(text) }
         }
         let credentials = SSHCredentials(
             host: host.host, port: host.port, username: host.username,
             secret: host.auth == .password
                 ? .password(secret)
                 : .privateKey(pem: secret, passphrase: secrets.secret(for: host.passphraseKey)))
-        info("connecting to \(host.address)…")
+        note("connecting to \(host.address)…")
         let new = try await SSHConnection.connect(credentials, label: host.name, trustedHostKey: host.trustedHostKey)
         if host.trustedHostKey == nil, !new.hostKey.isEmpty, let index = hosts.firstIndex(where: { $0.id == host.id }) {
             hosts[index].trustedHostKey = new.hostKey
             storage.saveHosts(hosts)
-            info("first connection: trusting host key \(SSHKeys.fingerprint(ofOpenSSHKey: new.hostKey))")
+            note("first connection: trusting host key \(SSHKeys.fingerprint(ofOpenSSHKey: new.hostKey))")
         }
         connection = new
         connectionHostID = host.id

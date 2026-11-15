@@ -7,7 +7,7 @@ struct TermAIApp: App {
 
     var body: some Scene {
         WindowGroup {
-            TerminalView()
+            RootView()
                 .environment(model)
         }
     }
