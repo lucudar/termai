@@ -13,7 +13,7 @@ public final class InMemorySecretStore: SecretStore {
     public func setSecret(_ value: String?, for key: String) { values[key] = value }
 }
 
-/// JSON files under one directory: profiles, hosts, settings and one file per session.
+/// JSON files under one directory: profiles, hosts, settings, connectors and one file per session.
 public final class Storage {
     public let directory: URL
     private let encoder: JSONEncoder
@@ -49,6 +49,9 @@ public final class Storage {
 
     public func loadSettings() -> AppSettings { read(AppSettings.self, from: "settings.json") ?? AppSettings() }
     public func saveSettings(_ settings: AppSettings) { write(settings, to: "settings.json") }
+
+    public func loadConnectors() -> [Connector] { read([Connector].self, from: "connectors.json") ?? [] }
+    public func saveConnectors(_ connectors: [Connector]) { write(connectors, to: "connectors.json") }
 
     public func saveSession(_ session: Session) {
         guard !session.isEmpty else { return }

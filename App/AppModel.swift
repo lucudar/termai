@@ -18,6 +18,33 @@ struct ShareItem: Identifiable {
     let text: String
 }
 
+/// The tabs: chat with the agent, a terminal of your own, settings.
+enum AppTab: Hashable {
+    case chat, terminal, settings
+}
+
+/// Every sheet the app shows, from one place, so two presentations never fight over the same view.
+enum AppSheet: Identifiable {
+    case share(String)
+    /// A new SSH environment from the environment menu.
+    case host(SSHHost)
+    /// The document picker behind "Add files".
+    case files
+    /// "Open folder…" on the SSH environment.
+    case folder
+    case connectors
+
+    var id: String {
+        switch self {
+        case .share: return "share"
+        case .host(let host): return "host-" + host.id.uuidString
+        case .files: return "files"
+        case .folder: return "folder"
+        case .connectors: return "connectors"
+        }
+    }
+}
+
 /// The `/setup` wizard: each step consumes one line of input.
 enum SetupStep {
     case name
@@ -56,8 +83,8 @@ final class AppModel {
     var isRunning = false
     var pendingApproval: PendingApproval?
     var setup: SetupStep?
-    var showSettings = false
-    var shareItem: ShareItem?
+    var tab: AppTab = .chat
+    var sheet: AppSheet?
     var usageLine: String?
     /// Bumped when the transcript should jump to the bottom.
     var scrollTick = 0
@@ -65,14 +92,26 @@ final class AppModel {
     var recentSessions: [SessionSummary] = []
     /// Files and photos for the next prompt.
     var attachments: [PendingAttachment] = []
+    /// Picked files still being read.
+    var attachmentsLoading = 0
     var showPhotoPicker = false
-    var showFileImporter = false
-    /// The "Open folder…" prompt.
-    var promptForFolder = false
-    /// A new SSH environment being set up from the environment menu.
-    var editingHost: SSHHost?
     /// Prompt tokens of the last request: the context ring and `ctx %`.
     var lastInputTokens = 0
+
+    // The terminal tab.
+    var terminalLines: [TerminalLine] = []
+    var terminalInput = ""
+    var terminalRunning = false
+    /// Bumped when the terminal should jump to the bottom.
+    var terminalTick = 0
+    /// The directory the terminal is in, per environment ("local" or a host id).
+    var terminalDirectories: [String: String] = [:]
+
+    // Connectors (remote MCP servers).
+    var connectors: [Connector] = []
+    var connectorTools: [UUID: [MCPTool]] = [:]
+    var connectorErrors: [UUID: String] = [:]
+    var connectorBusy: Set<UUID> = []
 
     @ObservationIgnored let storage: Storage
     @ObservationIgnored let secrets: SecretStore
@@ -94,6 +133,10 @@ final class AppModel {
     @ObservationIgnored var notesCache: [String: String] = [:]
     @ObservationIgnored var runContextLimit = Profile.defaultContextWindow
     @ObservationIgnored var contextHintShown = false
+    @ObservationIgnored var terminalTask: Task<Void, Never>?
+    @ObservationIgnored var terminalHistory: [String] = []
+    @ObservationIgnored var terminalHistoryIndex: Int?
+    @ObservationIgnored var mcpClients: [UUID: MCPClient] = [:]
 
     init() {
         let files = FileManager.default
@@ -117,11 +160,20 @@ final class AppModel {
         profiles = storage.loadProfiles()
         hosts = storage.loadHosts()
         settings = storage.loadSettings()
+        connectors = storage.loadConnectors()
 
         if isDemo {
             loadDemo(withApproval: arguments.contains("-demoApproval"), home: arguments.contains("-demoHome"))
-            showSettings = arguments.contains("-demoSettings")
             showSidebar = arguments.contains("-demoSidebar")
+            if arguments.contains("-demoSettings") { tab = .settings }
+            if arguments.contains("-demoTerminal") {
+                loadTerminalDemo()
+                tab = .terminal
+            }
+            if arguments.contains("-demoConnectors") {
+                loadConnectorsDemo()
+                sheet = .connectors
+            }
         } else {
             refreshRecents()
             // Model discovery: fill the picker from /models unless a hand-made list makes it unnecessary.
@@ -129,6 +181,51 @@ final class AppModel {
                 refreshModels(for: profile.id, quiet: true)
             }
         }
+    }
+
+    // MARK: Navigation
+
+    /// `/config` and the gear buttons open the Settings tab.
+    var showSettings: Bool {
+        get { tab == .settings }
+        set {
+            if newValue {
+                showSidebar = false
+                tab = .settings
+            } else if tab == .settings {
+                tab = .chat
+            }
+        }
+    }
+
+    /// `/export` shares the session as Markdown.
+    var shareItem: ShareItem? {
+        get {
+            if case .share(let text) = sheet { return ShareItem(text: text) }
+            return nil
+        }
+        set { sheet = newValue.map { .share($0.text) } }
+    }
+
+    /// Shows a sheet once a menu that asked for it has finished closing; presenting while it closes can fail.
+    func present(_ next: AppSheet) {
+        showSidebar = false
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            self?.sheet = next
+        }
+    }
+
+    func presentPhotos() {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            self?.showPhotoPicker = true
+        }
+    }
+
+    func openTerminal() {
+        showSidebar = false
+        tab = .terminal
     }
 
     // MARK: Derived state
