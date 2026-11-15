@@ -2,7 +2,7 @@ import SwiftUI
 import TermCore
 import UIKit
 
-/// The input box with its + menu, model menu and send button, and the chips under it.
+/// The input card with its + menu, model menu and send button, and the chips under it, on Liquid Glass.
 struct Composer: View {
     @Environment(AppModel.self) var model
     var inputFocused: FocusState<Bool>.Binding
@@ -11,74 +11,91 @@ struct Composer: View {
         @Bindable var model = model
         let palette = model.palette
 
-        VStack(spacing: 8) {
-            if let approval = model.pendingApproval {
-                ApprovalBar(approval: approval, palette: palette)
-            } else if !model.suggestions.isEmpty {
-                SuggestionList(palette: palette)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                if !model.attachments.isEmpty {
-                    AttachmentStrip(palette: palette)
+        GlassGroup(spacing: 10) {
+            VStack(spacing: 10) {
+                if let approval = model.pendingApproval {
+                    ApprovalBar(approval: approval, palette: palette)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if !model.suggestions.isEmpty {
+                    SuggestionList(palette: palette)
                 }
-                Group {
-                    if model.inputIsSecret {
-                        SecureField("", text: $model.input, prompt: Text(model.placeholder).foregroundStyle(palette.dim))
-                    } else {
-                        TextField("", text: $model.input, prompt: Text(model.placeholder).foregroundStyle(palette.dim), axis: .vertical)
-                            .lineLimit(1...8)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    if !model.attachments.isEmpty || model.attachmentsLoading > 0 {
+                        AttachmentStrip(palette: palette)
+                    }
+                    Group {
+                        if model.inputIsSecret {
+                            SecureField("", text: $model.input, prompt: Text(model.placeholder).foregroundStyle(palette.dim))
+                        } else {
+                            TextField("", text: $model.input, prompt: Text(model.placeholder).foregroundStyle(palette.dim), axis: .vertical)
+                                .lineLimit(1...8)
+                        }
+                    }
+                    .font(palette.font)
+                    .foregroundStyle(palette.text)
+                    .tint(palette.accent)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.send)
+                    .focused(inputFocused)
+                    .onSubmit(send)
+
+                    HStack(spacing: 8) {
+                        PlusMenu(palette: palette)
+                        Spacer(minLength: 6)
+                        ModelMenu(palette: palette)
+                        SendButton(palette: palette, send: send)
                     }
                 }
-                .font(palette.font)
-                .foregroundStyle(palette.text)
-                .tint(palette.accent)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.send)
-                .focused(inputFocused)
-                .onSubmit(send)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
 
-                HStack(spacing: 10) {
-                    PlusMenu(palette: palette)
-                    Spacer(minLength: 6)
-                    ModelMenu(palette: palette)
-                    SendButton(palette: palette, send: send)
+                HStack(spacing: 8) {
+                    EnvironmentChip(palette: palette)
+                    FolderChip(palette: palette)
+                    Spacer(minLength: 4)
+                    PermissionsChip(palette: palette)
+                    ContextRing(palette: palette)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-            .background(palette.code, in: RoundedRectangle(cornerRadius: 20))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(palette.dim.opacity(0.22), lineWidth: 1))
-
-            HStack(spacing: 14) {
-                EnvironmentChip(palette: palette)
-                FolderChip(palette: palette)
-                Spacer(minLength: 6)
-                PermissionsChip(palette: palette)
-                ContextRing(palette: palette)
-            }
-            .padding(.horizontal, 6)
-
-            if inputFocused.wrappedValue {
-                KeyRow(palette: palette, send: send, hideKeyboard: { inputFocused.wrappedValue = false })
-            }
         }
+        .animation(.spring(duration: 0.3), value: model.pendingApproval)
         .padding(.horizontal, 12)
         .padding(.top, 6)
-        .padding(.bottom, 6)
-        .background(palette.background)
+        .padding(.bottom, 8)
     }
 
     private func send() {
         model.submit()
-        // Submitting drops focus; keep the keyboard up like a terminal would.
+        // Submitting drops focus; keep the keyboard up for the next message.
         DispatchQueue.main.async { inputFocused.wrappedValue = true }
     }
 }
 
-// MARK: Inside the box
+/// A chip under the input card: a small glass capsule.
+struct ChipLabel: View {
+    let title: String
+    let symbol: String?
+    let color: Color
+    let palette: Palette
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let symbol { Image(systemName: symbol).font(.system(size: 12, weight: .medium)) }
+            Text(title).lineLimit(1)
+        }
+        .font(palette.chip)
+        .foregroundStyle(color)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .liquidGlass(in: Capsule(), interactive: true)
+    }
+}
+
+// MARK: Inside the card
 
 private struct PlusMenu: View {
     @Environment(AppModel.self) private var model
@@ -86,45 +103,50 @@ private struct PlusMenu: View {
 
     var body: some View {
         Menu {
-            Button {
-                model.showPhotoPicker = true
-            } label: {
-                Label("Add photos", systemImage: "photo.on.rectangle")
+            Section {
+                Button {
+                    model.presentPhotos()
+                } label: {
+                    Label("Add photos", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    model.present(.files)
+                } label: {
+                    Label("Add files", systemImage: "paperclip")
+                }
+                Button {
+                    model.present(.folder)
+                } label: {
+                    Label("Open folder…", systemImage: "folder.badge.plus")
+                }
+                .disabled(model.activeHost == nil)
             }
-            Button {
-                model.showFileImporter = true
-            } label: {
-                Label("Add files", systemImage: "paperclip")
+            Section {
+                Button {
+                    model.input = "/"
+                } label: {
+                    Label("Slash commands", systemImage: "slash.circle")
+                }
+                Button {
+                    model.openTerminal()
+                } label: {
+                    Label("Open terminal", systemImage: "apple.terminal")
+                }
             }
-            Button {
-                model.promptForFolder = true
-            } label: {
-                Label("Add folder", systemImage: "folder.badge.plus")
+            Section {
+                Button {
+                    model.present(.connectors)
+                } label: {
+                    Label(model.connectors.isEmpty ? "Manage connectors" : "Manage connectors (\(model.enabledConnectorCount) on)",
+                          systemImage: "puzzlepiece.extension")
+                }
             }
-            .disabled(model.activeHost == nil)
-            Divider()
-            Button {
-                model.input = "/"
-            } label: {
-                Label("Slash commands", systemImage: "slash.circle")
-            }
-            Button {
-                model.input = "!"
-            } label: {
-                Label("Run a command yourself", systemImage: "terminal")
-            }
-            Divider()
-            Button {
-            } label: {
-                Label("Manage connectors (soon)", systemImage: "square.grid.2x2")
-            }
-            .disabled(true)
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(palette.text)
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
+                .frame(width: 34, height: 34)
+                .contentShape(Circle())
         }
         .accessibilityLabel("Add")
     }
@@ -179,11 +201,12 @@ private struct ModelMenu: View {
             HStack(spacing: 5) {
                 Text(model.activeModelShortName).foregroundStyle(palette.text)
                 Text(model.effort?.title ?? "Auto").foregroundStyle(palette.dim)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(palette.dim)
             }
             .font(palette.chip)
             .lineLimit(1)
             .truncationMode(.middle)
-            .frame(maxWidth: 220, alignment: .trailing)
+            .frame(maxWidth: 230, alignment: .trailing)
         }
         .accessibilityLabel("Model and effort")
     }
@@ -217,12 +240,11 @@ private struct SendButton: View {
             }
         } label: {
             Image(systemName: running ? "stop.fill" : "arrow.up")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(palette.background)
-                .frame(width: 32, height: 32)
-                .background(running ? palette.error : (ready ? palette.accent : palette.dim.opacity(0.5)), in: Circle())
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 22, height: 22)
         }
-        .buttonStyle(.plain)
+        .roundProminent(running ? palette.error : (ready ? palette.accent : palette.dim.opacity(0.6)))
+        .animation(.easeOut(duration: 0.15), value: ready)
         .accessibilityLabel(running ? "Stop" : "Send")
     }
 }
@@ -250,7 +272,18 @@ private struct AttachmentStrip: View {
                     .foregroundStyle(palette.text)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(palette.background.opacity(0.7), in: Capsule())
+                    .background(palette.text.opacity(0.08), in: Capsule())
+                }
+                if model.attachmentsLoading > 0 {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Reading…")
+                    }
+                    .font(palette.small)
+                    .foregroundStyle(palette.dim)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(palette.text.opacity(0.05), in: Capsule())
                 }
             }
         }
@@ -267,10 +300,8 @@ private struct EnvironmentChip: View {
         Menu {
             EnvironmentMenuContent()
         } label: {
-            Label(model.environmentName, systemImage: model.activeHost == nil ? "iphone" : "server.rack")
-                .font(palette.chip)
-                .foregroundStyle(palette.dim)
-                .lineLimit(1)
+            ChipLabel(title: model.environmentName, symbol: model.activeHost == nil ? "iphone" : "server.rack",
+                      color: palette.text.opacity(0.8), palette: palette)
         }
         .accessibilityLabel("Environment")
     }
@@ -284,10 +315,7 @@ private struct FolderChip: View {
         Menu {
             FolderMenuContent()
         } label: {
-            Label(model.folderName, systemImage: "folder")
-                .font(palette.chip)
-                .foregroundStyle(palette.dim)
-                .lineLimit(1)
+            ChipLabel(title: model.folderName, symbol: "folder", color: palette.text.opacity(0.8), palette: palette)
         }
         .accessibilityLabel("Folder")
     }
@@ -319,10 +347,8 @@ private struct PermissionsChip: View {
                 }
             }
         } label: {
-            Text(bypass ? "Bypass permissions" : "Ask first")
-                .font(palette.chip)
-                .foregroundStyle(bypass ? palette.accent : palette.dim)
-                .lineLimit(1)
+            ChipLabel(title: bypass ? "Bypass" : "Ask first", symbol: bypass ? "bolt.shield" : "hand.raised",
+                      color: bypass ? palette.accent : palette.text.opacity(0.8), palette: palette)
         }
         .accessibilityLabel("Permissions")
     }
@@ -347,9 +373,10 @@ private struct ContextRing: View {
                     .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
-            .frame(width: 16, height: 16)
-            .padding(6)
-            .contentShape(Rectangle())
+            .frame(width: 15, height: 15)
+            .padding(9)
+            .liquidGlass(in: Circle(), interactive: true)
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Context window")
@@ -377,47 +404,6 @@ private struct ContextRing: View {
     }
 }
 
-// MARK: Terminal helpers
-
-private struct KeyRow: View {
-    @Environment(AppModel.self) private var model
-    let palette: Palette
-    let send: () -> Void
-    let hideKeyboard: () -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                key("esc") { model.escape() }
-                key("/") { model.input += "/" }
-                key("!") { model.input += "!" }
-                key("↑") { model.historyUp() }
-                key("↓") { model.historyDown() }
-                key("tab") { model.completeSuggestion() }
-                key("^C", tint: model.isRunning ? palette.error : nil) { model.cancel() }
-                key("paste") {
-                    if let text = UIPasteboard.general.string { model.input += text }
-                }
-                key("⌄", action: hideKeyboard)
-                key("⏎", tint: palette.accent, action: send)
-            }
-            .padding(.horizontal, 4)
-        }
-    }
-
-    private func key(_ label: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(palette.monoSmall)
-                .foregroundStyle(tint ?? palette.text)
-                .padding(.horizontal, 11)
-                .frame(minWidth: 38, minHeight: 32)
-                .background(palette.code, in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private struct SuggestionList: View {
     @Environment(AppModel.self) private var model
     let palette: Palette
@@ -441,8 +427,8 @@ private struct SuggestionList: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, 4)
-        .background(palette.code, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.vertical, 6)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
@@ -454,38 +440,42 @@ private struct ApprovalBar: View {
     private var question: String {
         if approval.summary.hasPrefix("edit ") { return "Apply this edit?" }
         if approval.summary.hasPrefix("write ") { return "Write this file?" }
+        if approval.summary.contains(" \u{00B7} ") { return "Use this connector tool?" }
         return "Run this?"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(question).font(palette.small).foregroundStyle(palette.accent)
+        VStack(alignment: .leading, spacing: 10) {
+            Label(question, systemImage: "exclamationmark.shield")
+                .font(palette.small.weight(.semibold))
+                .foregroundStyle(palette.accent)
             Text(approval.summary).font(palette.monoSmall).foregroundStyle(palette.text).lineLimit(6)
             if let detail = approval.detail, !detail.isEmpty {
                 DiffText(text: detail, palette: palette)
                     .lineLimit(12)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(palette.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                    .background(palette.code.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             HStack(spacing: 8) {
-                choice(palette.monospaced ? "[y] yes" : "Allow", palette.success) { model.resolveApproval(.allow) }
-                choice(palette.monospaced ? "[n] no" : "Deny", palette.error) { model.resolveApproval(.deny) }
-                choice(palette.monospaced ? "[a] always" : "Always allow", palette.dim) { model.allowAlways() }
+                choice(palette.monospaced ? "[y] yes" : "Allow", palette.success, prominent: true) { model.resolveApproval(.allow) }
+                choice(palette.monospaced ? "[n] no" : "Deny", palette.error, prominent: false) { model.resolveApproval(.deny) }
+                choice(palette.monospaced ? "[a] always" : "Always", palette.text, prominent: false) { model.allowAlways() }
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.code, in: RoundedRectangle(cornerRadius: 14))
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous), tint: palette.accent.opacity(0.12))
     }
 
-    private func choice(_ label: String, _ color: Color, action: @escaping () -> Void) -> some View {
+    private func choice(_ label: String, _ color: Color, prominent: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(palette.small).foregroundStyle(color)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 34)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.6)))
+            Text(label)
+                .font(palette.small.weight(.semibold))
+                .foregroundStyle(prominent ? Color.white : color)
+                .frame(maxWidth: .infinity, minHeight: 26)
         }
-        .buttonStyle(.plain)
+        .glassButton(prominent: prominent)
+        .tint(prominent ? color : nil)
     }
 }
