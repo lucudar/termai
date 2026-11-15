@@ -20,6 +20,26 @@ fail() {
     exit 1
 }
 
+# The newest Xcode 26 or later on the image (the default is older): Liquid Glass needs the iOS 26 SDK.
+select_xcode() {
+    local newest
+    newest=$(python3 -c '
+import glob, re
+apps = []
+for path in glob.glob("/Applications/Xcode_*.app"):
+    match = re.fullmatch(r"/Applications/Xcode_(\d+(?:\.\d+)*)\.app", path)
+    if match and int(match.group(1).split(".")[0]) >= 26:
+        apps.append(([int(p) for p in match.group(1).split(".")], path))
+print(max(apps)[1] if apps else "")
+')
+    if [ -n "$newest" ]; then
+        sudo xcode-select -s "$newest/Contents/Developer" || fail "Selecting $newest"
+    else
+        echo "::warning::No Xcode 26 on this image; building without Liquid Glass"
+    fi
+    xcodebuild -version
+}
+
 core_tests() {
     local log="logs/core-$1.log"
     swift --version
@@ -29,7 +49,6 @@ core_tests() {
 }
 
 build_ipa() {
-    xcodebuild -version
     python3 scripts/make_icon.py App/Assets.xcassets/AppIcon.appiconset/icon-1024.png || fail "Drawing the app icon"
     command -v xcodegen > /dev/null || brew install xcodegen
     xcodegen generate > logs/xcodegen.log 2>&1 || fail "Generating the Xcode project" logs/xcodegen.log
@@ -113,6 +132,7 @@ core-linux)
     core_tests linux
     ;;
 ipa)
+    select_xcode
     core_tests macos
     build_ipa
     if on_main; then publish_release; fi
