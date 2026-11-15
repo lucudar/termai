@@ -168,47 +168,44 @@ extension AppModel {
 
     func addPhotos(_ items: [PhotosPickerItem]) {
         for item in items {
+            attachmentsLoading += 1
             Task { [weak self] in
                 let data = try? await item.loadTransferable(type: Data.self)
+                // Decoding and scaling a camera photo takes a moment; keep it off the main thread.
+                let url: String? = await Task.detached(priority: .userInitiated) {
+                    data.flatMap { ImageAttachment.dataURL(from: $0) }
+                }.value
                 guard let self else { return }
-                guard let data, let url = ImageAttachment.dataURL(from: data) else {
-                    return self.fail("could not read that photo")
-                }
+                self.attachmentsLoading -= 1
+                guard let url else { return self.fail("could not read that photo") }
                 let number = self.attachments.filter { $0.isImage }.count + 1
                 self.attachments.append(PendingAttachment(name: "photo \(number)", kind: .image(url)))
             }
         }
     }
 
-    /// Images go to the model as images, small text files are inlined, anything else lands in the workspace.
-    func addFiles(_ result: Result<[URL], Error>) {
-        let urls: [URL]
-        switch result {
-        case .success(let picked): urls = picked
-        case .failure(let error): return fail("files: \(error.localizedDescription)")
-        }
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let name = url.lastPathComponent
-            guard let data = try? Data(contentsOf: url) else {
-                fail("could not read \(name)")
-                continue
-            }
-            if let image = ImageAttachment.dataURL(from: data) {
-                attachments.append(PendingAttachment(name: name, kind: .image(image)))
-            } else if data.count <= 200_000, let text = String(data: data, encoding: .utf8) {
-                attachments.append(PendingAttachment(name: name, kind: .text(text)))
-            } else {
-                let inbox = workspace.appendingPathComponent("Inbox", isDirectory: true)
-                do {
-                    try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
-                    let target = inbox.appendingPathComponent(name)
-                    try? FileManager.default.removeItem(at: target)
-                    try data.write(to: target)
-                    attachments.append(PendingAttachment(name: name, kind: .file("Inbox/\(name)")))
-                } catch {
-                    fail("could not copy \(name): \(error.localizedDescription)")
+    /// Files from the document picker (already copied into the app). Images go to the model as images,
+    /// text and PDF text are inlined, anything else lands in the workspace's Inbox folder.
+    func addFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let inbox = workspace.appendingPathComponent("Inbox", isDirectory: true)
+        attachmentsLoading += urls.count
+        Task { [weak self] in
+            for url in urls {
+                let name = url.lastPathComponent
+                let loaded: Result<PendingAttachment, Error> = await Task.detached(priority: .userInitiated) {
+                    Result { try FileAttachment.load(url, inbox: inbox) }
+                }.value
+                guard let self else { return }
+                self.attachmentsLoading -= 1
+                switch loaded {
+                case .success(let attachment):
+                    self.attachments.append(attachment)
+                    if case .file(let path) = attachment.kind {
+                        self.info("\(name) is too big or not text, so it was saved to the on-device workspace as \(path). the agent can open it from there")
+                    }
+                case .failure(let error):
+                    self.fail("could not add \(name): \(error.localizedDescription)")
                 }
             }
         }
