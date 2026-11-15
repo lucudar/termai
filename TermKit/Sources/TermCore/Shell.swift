@@ -16,8 +16,8 @@ public enum ShellCommand {
     /// `~` stays unquoted so the remote shell expands it.
     static func quotePath(_ path: String) -> String {
         if path == "~" { return "~" }
-        if path.hasPrefix("~/") { return "~/" + RemoteFiles.quote(String(path.dropFirst(2))) }
-        return RemoteFiles.quote(path)
+        if path.hasPrefix("~/") { return "~/" + Shell.quote(String(path.dropFirst(2))) }
+        return Shell.quote(path)
     }
 
     /// The output without the marker, plus the exit code and directory when the marker arrived.
