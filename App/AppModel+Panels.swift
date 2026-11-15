@@ -82,9 +82,10 @@ extension AppModel {
 
     // MARK: Panels
 
-    func toggleSidebar() {
-        if !showSidebar { refreshRecents() }
-        showSidebar.toggle()
+    /// The chats sheet: every saved session, newest first.
+    func showChats() {
+        refreshRecents()
+        sheet = .chats
     }
 
     func refreshRecents() {
@@ -116,6 +117,13 @@ extension AppModel {
         }
         storage.deleteSession(id: id)
         refreshRecents()
+    }
+
+    /// The context chip's "Compact the session": the same as typing /compact.
+    func compactSession() {
+        guard !isRunning else { return info("busy. ^C stops the current run") }
+        append(.user, "/compact")
+        runCommand("compact", "")
     }
 
     func setEffort(_ effort: Effort?) {
@@ -166,9 +174,17 @@ extension AppModel {
         }
     }
 
+    /// "Add files": the system document picker, once the + menu has finished closing.
+    func pickFiles() {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            DocumentPicker.present { urls in self?.addFiles(urls) }
+        }
+    }
+
     func addPhotos(_ items: [PhotosPickerItem]) {
         for item in items {
-            attachmentsLoading += 1
+            attachmentsLoading.append("photo")
             Task { [weak self] in
                 let data = try? await item.loadTransferable(type: Data.self)
                 // Decoding and scaling a camera photo takes a moment; keep it off the main thread.
@@ -176,38 +192,62 @@ extension AppModel {
                     data.flatMap { ImageAttachment.dataURL(from: $0) }
                 }.value
                 guard let self else { return }
-                self.attachmentsLoading -= 1
-                guard let url else { return self.fail("could not read that photo") }
+                self.finishLoading("photo")
+                guard let url else { return self.notify("Could not read that photo", error: true) }
                 let number = self.attachments.filter { $0.isImage }.count + 1
-                self.attachments.append(PendingAttachment(name: "photo \(number)", kind: .image(url)))
+                self.attachments.append(PendingAttachment(name: "photo \(number)", kind: .image(url), detail: "image"))
             }
         }
     }
 
     /// Files from the document picker (already copied into the app). Images go to the model as images,
-    /// text and PDF text are inlined, anything else lands in the workspace's Inbox folder.
+    /// text and PDF text are inlined, anything else lands in the workspace's Inbox folder. Each file shows
+    /// as "Reading…" until it is ready, then a line over the input says how it went.
     func addFiles(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         let inbox = workspace.appendingPathComponent("Inbox", isDirectory: true)
-        attachmentsLoading += urls.count
+        attachmentsLoading += urls.map(\.lastPathComponent)
         Task { [weak self] in
+            var failures: [String] = []
+            var saved: [String] = []
             for url in urls {
                 let name = url.lastPathComponent
                 let loaded: Result<PendingAttachment, Error> = await Task.detached(priority: .userInitiated) {
                     Result { try FileAttachment.load(url, inbox: inbox) }
                 }.value
                 guard let self else { return }
-                self.attachmentsLoading -= 1
+                self.finishLoading(name)
                 switch loaded {
                 case .success(let attachment):
                     self.attachments.append(attachment)
-                    if case .file(let path) = attachment.kind {
-                        self.info("\(name) is too big or not text, so it was saved to the on-device workspace as \(path). the agent can open it from there")
-                    }
+                    if case .file(let path) = attachment.kind { saved.append(path) }
                 case .failure(let error):
-                    self.fail("could not add \(name): \(error.localizedDescription)")
+                    failures.append("\(name): \(error.localizedDescription)")
                 }
             }
+            guard let self else { return }
+            if !failures.isEmpty {
+                self.notify("Could not add " + failures.joined(separator: "; "), error: true)
+            } else if !saved.isEmpty {
+                self.notify("Not text, so it was saved for the agent to open: " + saved.joined(separator: ", "))
+            } else {
+                self.notify(urls.count == 1 ? "Attached \(urls[0].lastPathComponent)" : "Attached \(urls.count) files")
+            }
+        }
+    }
+
+    func finishLoading(_ name: String) {
+        if let index = attachmentsLoading.firstIndex(of: name) { attachmentsLoading.remove(at: index) }
+    }
+
+    /// Shows `text` over the input for a few seconds, with a tap of the haptic engine.
+    func notify(_ text: String, error: Bool = false) {
+        let notice = ComposerNotice(text: text, isError: error)
+        composerNotice = notice
+        UINotificationFeedbackGenerator().notificationOccurred(error ? .error : .success)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if self?.composerNotice == notice { self?.composerNotice = nil }
         }
     }
 
@@ -238,6 +278,9 @@ extension AppModel {
         lastInputTokens = 8_200
         append(.user, "the api on web1 returns 500, fix it")
         append(.thinking, "A 500 from the API. Start with the service log, then read the code it points at.")
+        let plan = [PlanStep("Read the service log", .completed), PlanStep("Find the failing code", .completed),
+                    PlanStep("Fix it and restart", withApproval ? .inProgress : .completed)]
+        append(.tool, Plan.render(plan), title: Plan.toolName, status: .ok)
         append(.tool, "KeyError: 'DATABASE_URL'\n  File \"/home/deploy/app/config.py\", line 12, in load",
                title: "ssh web1:app $ journalctl -u app -n 20 --no-pager", status: .ok)
         append(.tool, "config.py:12:url = os.environ['DATABASE_URL']\n.env:3:DB_URL=postgres://app@db/app",

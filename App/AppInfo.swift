@@ -1,7 +1,7 @@
 import Foundation
 
-/// The installed build, e.g. "0.4.0 (12) · ab3abbc", shown at the bottom of the home screen. CI stamps
-/// the run number and the commit into Info.plist, so the app on the phone can be matched with its release.
+/// The installed build, e.g. "0.5.0 (12) · ab3abbc", shown on a new chat until a gateway is added. CI
+/// stamps the run number and the commit into Info.plist, so the app on the phone can be matched with its release.
 enum AppInfo {
     static var version: String {
         let info = Bundle.main.infoDictionary

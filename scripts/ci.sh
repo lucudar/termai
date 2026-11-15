@@ -56,8 +56,8 @@ core_tests() {
     fi
 }
 
-# Each CI build gets its own build number (the run number) and its commit. The home screen shows both
-# (Settings shows the build), so an installed app can be matched with its release.
+# Each CI build gets its own build number (the run number) and its commit. Settings shows the build and a
+# new chat without a gateway shows both, so an installed app can be matched with its release.
 stamp_build() {
     local plist=$1/Info.plist
     if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
@@ -85,7 +85,8 @@ build_info() {
         echo "Lines with each string in the app binary:"
         for s in "Manage connectors (soon)" "Manage connectors" "Ask the agent about the output" \
             "https://mcp.deepwiki.com/mcp" "notifications/initialized" "UIDocumentPickerViewController" \
-            "GlassEffectContainer" "glassEffect"; do
+            "GlassEffectContainer" "glassEffect" "Keep a short plan for work" "Thought it through" \
+            "Not text, so it was saved for the agent to open"; do
             printf '  %-34s %s\n' "\"$s\"" "$(printf '%s\n' "$text" | grep -cF -- "$s")"
         done
     } > out/build-info.txt
@@ -123,7 +124,7 @@ publish_release() {
     {
         printf 'TermAI %s (%s), unsigned IPA built from %s (run %s).\n\n%s\n\n' \
             "$APP_VERSION" "$APP_BUILD" "$short" "${GITHUB_RUN_NUMBER:-?}" "${MESSAGE:-}"
-        printf 'The installed app shows `TermAI %s (%s) · %s` at the bottom of the home screen. ' \
+        printf 'The installed app shows `TermAI %s (%s)` at the bottom of Settings (and the commit, %s, on a new chat until a gateway is added). ' \
             "$APP_VERSION" "$APP_BUILD" "$short"
         printf '`%s` and `TermAI-unsigned.ipa` are the same file. Sign and install it with AltStore, Sideloadly or TrollStore.\n\n' \
             "$IPA_NAME"
@@ -207,7 +208,8 @@ print(next(d["udid"] for k in keys for d in runtimes[k] if d["name"].startswith(
     sleep 3
     for theme in desktop dark crt-green crt-amber light; do shoot "$udid" "$theme" -theme "$theme"; done
     shoot "$udid" home -demoHome
-    shoot "$udid" sidebar -demoSidebar
+    shoot "$udid" activity -demoExpanded
+    shoot "$udid" chats -demoChats
     shoot "$udid" approval -demoApproval
     shoot "$udid" settings -demoSettings
     shoot "$udid" terminal -demoTerminal

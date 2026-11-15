@@ -38,6 +38,8 @@ struct TerminalScreen: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
+                // A tap on the output puts the keyboard away, so the tabs are reachable again.
+                .simultaneousGesture(TapGesture().onEnded { focused = false })
                 .softScrollEdge()
                 .onChange(of: model.terminalTick) {
                     proxy.scrollTo("end", anchor: .bottom)
@@ -185,22 +187,32 @@ struct TerminalKeys: View {
     let hideKeyboard: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                key("esc") { model.terminalInput = "" }
-                key("↑") { model.terminalHistoryUp() }
-                key("↓") { model.terminalHistoryDown() }
-                key("^C", tint: model.terminalRunning ? palette.error : nil) { model.stopTerminal() }
-                ForEach(["|", "~", "/", "-", "&&", ">", "$"], id: \.self) { text in
-                    key(text) { model.terminalInput += text }
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    key("esc") { model.terminalInput = "" }
+                    key("↑") { model.terminalHistoryUp() }
+                    key("↓") { model.terminalHistoryDown() }
+                    key("^C", tint: model.terminalRunning ? palette.error : nil) { model.stopTerminal() }
+                    ForEach(["|", "~", "/", "-", "&&", ">", "$"], id: \.self) { text in
+                        key(text) { model.terminalInput += text }
+                    }
+                    key("paste") {
+                        if let text = UIPasteboard.general.string { model.terminalInput += text }
+                    }
                 }
-                key("paste") {
-                    if let text = UIPasteboard.general.string { model.terminalInput += text }
-                }
-                key("⌄", action: hideKeyboard)
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
             }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 2)
+            // Pinned outside the scrolling keys, so putting the keyboard away is always one tap.
+            Button(action: hideKeyboard) {
+                Image(systemName: "keyboard.chevron.compact.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .frame(minWidth: 30, minHeight: 22)
+            }
+            .glassButton()
+            .accessibilityLabel("Hide keyboard")
         }
     }
 
