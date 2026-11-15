@@ -70,25 +70,29 @@ stamp_build() {
     IPA_NAME="TermAI-$APP_VERSION-$APP_BUILD.ipa"
 }
 
-# What is inside the IPA, published with the release: the version, the toolchain, and strings from the
-# app binary that tell this UI from older builds (0.3 had a disabled "Manage connectors (soon)").
+# What is inside the IPA, published with the release: the version, the toolchain, and how often strings
+# that tell this UI from older builds occur in the app binary (0.3 had a disabled "Manage connectors (soon)").
+# The whole file is searched, so the names of imported SwiftUI symbols (glassEffect, ...) count too; Swift
+# string literals of 15 bytes or less are stored inside instructions and cannot be found this way.
 build_info() {
-    local app=$1 plist=$1/Info.plist bins text s
+    local app=$1 plist=$1/Info.plist bins
     bins=$(find "$app" -maxdepth 1 -type f \( -name TermAI -o -name '*.dylib' \))
-    text=$(strings -a $bins 2> /dev/null)
     {
         echo "TermAI $APP_VERSION ($APP_BUILD) · $(plist_get "$plist" TermAICommit)"
         echo "commit ${GITHUB_SHA:-local}, run ${GITHUB_RUN_NUMBER:-local}"
         echo "$(xcodebuild -version | paste -sd ' ' -), SDK $(plist_get "$plist" DTSDKName), minimum iOS $(plist_get "$plist" MinimumOSVersion)"
-        echo "binary $(du -k $bins | awk '{ kb += $1 } END { print kb }') KB, $(printf '%s\n' "$text" | wc -l | tr -d ' ') strings"
+        echo "binary $(du -k $bins | awk '{ kb += $1 } END { print kb }') KB"
         echo
-        echo "Lines with each string in the app binary:"
-        for s in "Manage connectors (soon)" "Manage connectors" "Ask the agent about the output" \
-            "https://mcp.deepwiki.com/mcp" "notifications/initialized" "UIDocumentPickerViewController" \
-            "GlassEffectContainer" "glassEffect" "Keep a short plan for work" "Thought it through" \
-            "Not text, so it was saved for the agent to open"; do
-            printf '  %-34s %s\n' "\"$s\"" "$(printf '%s\n' "$text" | grep -cF -- "$s")"
-        done
+        echo "Times each string occurs in the app binary:"
+        python3 - $bins <<'PY'
+import sys
+data = b"".join(open(path, "rb").read() for path in sys.argv[1:])
+for text in ["Manage connectors (soon)", "Manage connectors", "Ask the agent about the output",
+             "https://mcp.deepwiki.com/mcp", "notifications/initialized", "UIDocumentPickerViewController",
+             "GlassEffectContainer", "glassEffect", "tabBarMinimizeBehavior", "Keep a short plan for work",
+             "Thought it through", "Not text, so it was saved for the agent to open"]:
+    print("  %-50s %d" % ('"%s"' % text, data.count(text.encode())))
+PY
     } > out/build-info.txt
     cat out/build-info.txt
 }
@@ -164,6 +168,9 @@ mcp_live_check() {
     cat out/mcp-live.txt
     if on_main; then
         gh release upload latest out/mcp-live.txt --clobber --repo "$GITHUB_REPOSITORY" || echo "could not add the MCP check"
+        # Also in the release notes, which the GitHub API returns as text.
+        { cat notes.md; printf '\n```\n'; cat out/mcp-live.txt; printf '```\n'; } > notes-mcp.md
+        gh release edit latest --notes-file notes-mcp.md --repo "$GITHUB_REPOSITORY" || echo "could not add the MCP check to the notes"
     fi
 }
 
